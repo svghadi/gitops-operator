@@ -40,6 +40,7 @@ CONTROLLER_CLUSTER_ROLE=${CONTROLLER_CLUSTER_ROLE:-""}
 DISABLE_DEFAULT_ARGOCD_INSTANCE=${DISABLE_DEFAULT_ARGOCD_INSTANCE:-"false"}
 SERVER_CLUSTER_ROLE=${SERVER_CLUSTER_ROLE:-""}
 WATCH_NAMESPACE=${WATCH_NAMESPACE:-""}
+ENABLE_CONVERSION_WEBHOOK=${ENABLE_CONVERSION_WEBHOOK:-"true"}
 
 # Print help message
 function print_help() {
@@ -101,7 +102,7 @@ function rollback_to_previous_image() {
   if [ ! -z "${PREV_OPERATOR_IMG}" ]; then
     export OPERATOR_IMG=${PREV_OPERATOR_IMG}    
     prepare_kustomize_files
-    ${KUSTOMIZE} build ${WORK_DIR} | ${KUBECTL} apply -f -
+    ${KUSTOMIZE} build ${WORK_DIR} | ${KUBECTL} apply --server-side=true -f -
     echo "[INFO] Operator update operation was unsuccessful!!";
   else
     echo "[INFO] Installing image for the first time. Nothing to rollback. Quitting..";
@@ -176,8 +177,10 @@ resources:
   - https://github.com/redhat-developer/gitops-operator/config/crd?ref=$GIT_REVISION&timeout=90s
   - https://github.com/redhat-developer/gitops-operator/config/rbac?ref=$GIT_REVISION&timeout=90s
   - https://github.com/redhat-developer/gitops-operator/config/manager?ref=$GIT_REVISION&timeout=90s
+  - https://github.com/redhat-developer/gitops-operator/config/webhook?ref=$GIT_REVISION&timeout=90s
 patches:
-  - path: https://raw.githubusercontent.com/redhat-developer/gitops-operator/master/config/default/manager_auth_proxy_patch.yaml 
+  - path: https://raw.githubusercontent.com/redhat-developer/gitops-operator/master/config/default/manager_auth_proxy_patch.yaml
+  - path: https://raw.githubusercontent.com/redhat-developer/gitops-operator/master/config/default/manager_webhook_patch.yaml
   - path: env-overrides.yaml
   - path: security-context.yaml" > ${WORK_DIR}/kustomization.yaml
 }
@@ -226,7 +229,9 @@ spec:
         - name: SERVER_CLUSTER_ROLE
           value: \"${SERVER_CLUSTER_ROLE}\"
         - name: WATCH_NAMESPACE
-          value: \"${WATCH_NAMESPACE}\"" > ${WORK_DIR}/env-overrides.yaml
+          value: \"${WATCH_NAMESPACE}\"
+        - name: ENABLE_CONVERSION_WEBHOOK
+          value: \"${ENABLE_CONVERSION_WEBHOOK}\"" > ${WORK_DIR}/env-overrides.yaml
 }
 
 # Create a security context for the containers that are present in the deployment.
@@ -378,7 +383,7 @@ function apply_kustomize_manifests() {
     echo "[INFO] (Attempt ${attempt}) Executing kustomize build command"
     ${KUSTOMIZE} build ${WORK_DIR} > ${WORK_DIR}/kustomize-build-output.yaml || continue
     echo "[INFO] (Attempt ${attempt}) Creating k8s resources from kustomize manifests"
-    ${KUBECTL} apply -f ${WORK_DIR}/kustomize-build-output.yaml && break
+    ${KUBECTL} apply --server-side=true -f ${WORK_DIR}/kustomize-build-output.yaml && break
   done
 }
 
@@ -439,6 +444,9 @@ function print_info() {
   fi
   if [ ! -z "${WATCH_NAMESPACE}" ]; then
     echo "WATCH_NAMESPACE: ${WATCH_NAMESPACE}"
+  fi
+  if [ ! -z "${ENABLE_CONVERSION_WEBHOOK}" ]; then
+    echo "ENABLE_CONVERSION_WEBHOOK: ${ENABLE_CONVERSION_WEBHOOK}"
   fi
   echo "==========================================="
 }
