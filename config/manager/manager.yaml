@@ -33,6 +33,7 @@ spec:
         - name: OPERATOR_NAME
           value: gitops-operator
         image: controller:latest
+        imagePullPolicy: Always
         livenessProbe:
           httpGet:
             path: /healthz
