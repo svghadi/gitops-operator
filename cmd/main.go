@@ -196,19 +196,19 @@ func main() {
 		client = mgr.GetClient()
 	}
 
-	registerComponentOrExit(mgr, console.AddToScheme)
-	registerComponentOrExit(mgr, routev1.AddToScheme) // Adding the routev1 api
-	registerComponentOrExit(mgr, operatorsv1.AddToScheme)
-	registerComponentOrExit(mgr, operatorsv1alpha1.AddToScheme)
-	registerComponentOrExit(mgr, argov1alpha1api.AddToScheme)
-	registerComponentOrExit(mgr, argov1beta1api.AddToScheme)
-	registerComponentOrExit(mgr, configv1.AddToScheme)
-	registerComponentOrExit(mgr, monitoringv1.AddToScheme)
-	registerComponentOrExit(mgr, rolloutManagerApi.AddToScheme)
-	registerComponentOrExit(mgr, templatev1.AddToScheme)
-	registerComponentOrExit(mgr, appsv1.AddToScheme)
-	registerComponentOrExit(mgr, oauthv1.AddToScheme)
-	registerComponentOrExit(mgr, crdv1.AddToScheme)
+	registerComponentOrExit(mgr, console.AddToScheme, console.GroupVersion.Group, console.GroupVersion.Version)
+	registerComponentOrExit(mgr, routev1.AddToScheme, routev1.GroupVersion.Group, routev1.GroupVersion.Version) // Adding the routev1 api
+	registerComponentOrExit(mgr, operatorsv1.AddToScheme, operatorsv1.GroupVersion.Group, operatorsv1.GroupVersion.Version)
+	registerComponentOrExit(mgr, operatorsv1alpha1.AddToScheme, operatorsv1alpha1.SchemeGroupVersion.Group, operatorsv1alpha1.SchemeGroupVersion.Version)
+	registerComponentOrExit(mgr, argov1alpha1api.AddToScheme, argov1alpha1api.GroupVersion.Group, argov1alpha1api.GroupVersion.Version)
+	registerComponentOrExit(mgr, argov1beta1api.AddToScheme, argov1beta1api.GroupVersion.Group, argov1beta1api.GroupVersion.Version)
+	registerComponentOrExit(mgr, configv1.AddToScheme, configv1.GroupVersion.Group, configv1.GroupVersion.Version)
+	registerComponentOrExit(mgr, monitoringv1.AddToScheme, monitoringv1.SchemeGroupVersion.Group, monitoringv1.SchemeGroupVersion.Version)
+	registerComponentOrExit(mgr, rolloutManagerApi.AddToScheme, rolloutManagerApi.GroupVersion.Group, rolloutManagerApi.GroupVersion.Version)
+	registerComponentOrExit(mgr, templatev1.AddToScheme, templatev1.GroupVersion.Group, templatev1.GroupVersion.Version)
+	registerComponentOrExit(mgr, appsv1.AddToScheme, appsv1.GroupVersion.Group, appsv1.GroupVersion.Version)
+	registerComponentOrExit(mgr, oauthv1.AddToScheme, oauthv1.GroupVersion.Group, oauthv1.GroupVersion.Version)
+	registerComponentOrExit(mgr, crdv1.AddToScheme, crdv1.SchemeGroupVersion.Group, crdv1.SchemeGroupVersion.Version)
 
 	// Start webhook only if ENABLE_CONVERSION_WEBHOOK is set
 	if strings.EqualFold(os.Getenv("ENABLE_CONVERSION_WEBHOOK"), "true") {
@@ -218,21 +218,35 @@ func main() {
 		}
 	}
 
-	if err = (&controllers.ReconcileGitopsService{
-		Client:                client,
-		Scheme:                mgr.GetScheme(),
-		DisableDefaultInstall: strings.ToLower(os.Getenv(common.DisableDefaultInstallEnvVar)) == "true",
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "GitopsService")
+	found, err := argoutil.VerifyAPI(console.GroupVersion.Group, console.GroupVersion.Version)
+	if err != nil {
+		setupLog.Error(err, "error verifying API", "group", console.GroupVersion.Group, "version", console.GroupVersion.Version)
 		os.Exit(1)
 	}
+	if found {
+		if err = (&controllers.ReconcileGitopsService{
+			Client:                client,
+			Scheme:                mgr.GetScheme(),
+			DisableDefaultInstall: strings.ToLower(os.Getenv(common.DisableDefaultInstallEnvVar)) == "true",
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "GitopsService")
+			os.Exit(1)
+		}
+	}
 
-	if err = (&controllers.ReconcileArgoCDRoute{
-		Client: client,
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Argo CD route")
+	found, err = argoutil.VerifyAPI(routev1.GroupVersion.Group, routev1.GroupVersion.Version)
+	if err != nil {
+		setupLog.Error(err, "error verifying API", "group", routev1.GroupVersion.Group, "version", routev1.GroupVersion.Version)
 		os.Exit(1)
+	}
+	if found {
+		if err = (&controllers.ReconcileArgoCDRoute{
+			Client: client,
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "Argo CD route")
+			os.Exit(1)
+		}
 	}
 
 	if err = (&controllers.ArgoCDMetricsReconciler{
@@ -341,13 +355,21 @@ func getArgoRolloutsOpenshiftRouteTrafficManagerPath() string {
 
 }
 
-func registerComponentOrExit(mgr manager.Manager, f func(*k8sruntime.Scheme) error) {
-	// Setup Scheme for all resources
-	if err := f(mgr.GetScheme()); err != nil {
-		setupLog.Error(err, "")
+func registerComponentOrExit(mgr manager.Manager, f func(*k8sruntime.Scheme) error, group string, version string) {
+	found, err := argoutil.VerifyAPI(group, version)
+	if err != nil {
+		setupLog.Error(err, "error verifying API", "group", group, "version", version)
 		os.Exit(1)
 	}
-	setupLog.Info(fmt.Sprintf("Component registered: %v", reflect.ValueOf(f)))
+	if found {
+		if err := f(mgr.GetScheme()); err != nil {
+			setupLog.Error(err, "")
+			os.Exit(1)
+		}
+		setupLog.Info(fmt.Sprintf("Component registered: %v", reflect.ValueOf(f)))
+	} else {
+		setupLog.Info(fmt.Sprintf("Component skipped: %v", reflect.ValueOf(f)))
+	}
 }
 
 func initK8sClient() (*kubernetes.Clientset, error) {
