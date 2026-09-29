@@ -19,7 +19,7 @@ package parallel
 import (
 	"strings"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -35,7 +35,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			fixture.EnsureParallelCleanSlate()
 		})
 
-		It("validates that openshift-gitops instance has expected .spec.RBAC.policy values", func() {
+		It("validates that openshift-gitops instance has expected .spec.RBAC.policy values", Label("openshift"), func() {
 
 			argoCD := &argov1beta1api.ArgoCD{
 				ObjectMeta: metav1.ObjectMeta{Name: "openshift-gitops", Namespace: "openshift-gitops"},

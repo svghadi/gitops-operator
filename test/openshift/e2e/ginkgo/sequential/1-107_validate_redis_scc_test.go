@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -32,7 +32,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("verifies that when Argo CD has HA enabled that the redis pods use restricted-v2 security policy", func() {
+		It("verifies that when Argo CD has HA enabled that the redis pods use restricted-v2 security policy", Label("openshift"), func() {
 
 			By("verifying we are running on a cluster with at least 3 nodes. This is required for Redis HA")
 			nodeFixture.ExpectHasAtLeastXNodes(3)

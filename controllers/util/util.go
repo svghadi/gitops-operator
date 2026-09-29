@@ -21,9 +21,10 @@ import (
 	stderrors "errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
-	"github.com/argoproj-labs/argocd-operator/controllers/argoutil"
+	"github.com/argoproj-labs/gitops-operator/argocd-operator/controllers/argoutil"
 	oappsv1 "github.com/openshift/api/apps/v1"
 	configv1 "github.com/openshift/api/config/v1"
 	console "github.com/openshift/api/console/v1"
@@ -41,7 +42,9 @@ import (
 )
 
 const (
-	clusterVersionName = "version"
+	clusterVersionName       = "version"
+	operatorPodNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+	DefaultOperatorNamespace = "openshift-gitops-operator"
 )
 
 var (
@@ -243,6 +246,9 @@ func ProxyEnvVars(vars ...corev1.EnvVar) []corev1.EnvVar {
 	proxyKeys := []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"}
 	for _, p := range proxyKeys {
 		if k, v := caseInsensitiveGetenv(p); k != "" {
+			if p == "NO_PROXY" {
+				v = addToNoProxy(v, ".cluster.local.") // add .cluster.local. (with trailing dot) to allow entry typically not added by OpenShift
+			}
 			result = append(result, corev1.EnvVar{Name: k, Value: v})
 		}
 	}
@@ -260,9 +266,15 @@ func caseInsensitiveGetenv(s string) (string, string) {
 	return "", ""
 }
 
-// BoolPtr returns a pointer to val
-func BoolPtr(val bool) *bool {
-	return &val
+func addToNoProxy(noProxy string, entry string) string {
+	if noProxy == "" {
+		return entry
+	}
+
+	if !slices.Contains(strings.Split(noProxy, ","), entry) {
+		return fmt.Sprintf("%s,%s", noProxy, entry)
+	}
+	return noProxy
 }
 
 func AddSeccompProfileForOpenShift(client client.Client, podspec *corev1.PodSpec) {
@@ -280,17 +292,31 @@ func AddSeccompProfileForOpenShift(client client.Client, podspec *corev1.PodSpec
 		}
 		if podspec.Containers[0].SecurityContext == nil {
 			podspec.Containers[0].SecurityContext = &corev1.SecurityContext{
-				AllowPrivilegeEscalation: BoolPtr(false),
+				AllowPrivilegeEscalation: new(false),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{
 						"ALL",
 					},
 				},
-				RunAsNonRoot: BoolPtr(true),
+				RunAsNonRoot: new(true),
 				SeccompProfile: &corev1.SeccompProfile{
 					Type: corev1.SeccompProfileTypeRuntimeDefault,
 				},
 			}
 		}
 	}
+}
+
+// GetOperatorNamespace returns the namespace the operator is running in by reading
+// the serviceaccount namespace file. If the file is not found (e.g. running locally),
+// it returns the default operator namespace and a nil error.
+func GetOperatorNamespace() (string, error) {
+	data, err := os.ReadFile(operatorPodNamespacePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return DefaultOperatorNamespace, nil
+		}
+		return "", fmt.Errorf("error retrieving operator namespace: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
 }

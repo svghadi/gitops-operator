@@ -17,7 +17,7 @@ limitations under the License.
 package sequential
 
 import (
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	routev1 "github.com/openshift/api/route/v1"
@@ -28,7 +28,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 )
 
 var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
@@ -39,7 +38,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			fixture.EnsureSequentialCleanSlate()
 		})
 
-		It("ensure that openshift-gitops Argo CD has correct default settings, and those settings can be changed which will affect the server Route", func() {
+		It("ensure that openshift-gitops Argo CD has correct default settings, and those settings can be changed which will affect the server Route", Label("openshift"), func() {
 
 			By("verifying Argo CD in openshift-gitops exists and has server route enabled")
 
@@ -73,7 +72,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			Eventually(serverRoute).Should(routeFixture.HaveTo(routev1.RouteTargetReference{
 				Kind:   "Service",
 				Name:   "openshift-gitops-server",
-				Weight: ptr.To(int32(100)),
+				Weight: new(int32(100)),
 			}))
 
 			By("verifying Route ingress has been admitted")
@@ -115,7 +114,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			Eventually(serverRoute).Should(routeFixture.HaveTo(routev1.RouteTargetReference{
 				Kind:   "Service",
 				Name:   "openshift-gitops-server",
-				Weight: ptr.To(int32(100)),
+				Weight: new(int32(100)),
 			}))
 
 			Eventually(serverRoute).Should(routeFixture.HaveConditionTypeStatus(routev1.RouteAdmitted, corev1.ConditionTrue))

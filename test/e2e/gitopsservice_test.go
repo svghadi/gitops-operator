@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	argoapp "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argoapp "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	configv1 "github.com/openshift/api/config/v1"
@@ -590,8 +590,8 @@ var _ = Describe("GitOpsServiceController", func() {
 						continue
 					}
 					if namespaces, ok := secret.Data["namespaces"]; ok {
-						namespaceList := strings.Split(string(namespaces), ",")
-						for _, ns := range namespaceList {
+						namespaceList := strings.SplitSeq(string(namespaces), ",")
+						for ns := range namespaceList {
 							if strings.TrimSpace(ns) == argocdTargetNamespace {
 								err := fmt.Errorf("namespace %v still present in cluster secret namespace list", argocdTargetNamespace)
 								GinkgoT().Log(err.Error())

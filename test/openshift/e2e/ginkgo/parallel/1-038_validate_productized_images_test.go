@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"strings"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -50,7 +50,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			k8sClient, _ = fixtureUtils.GetE2ETestKubeClient()
 			ctx = context.Background()
 		})
-
+		// TODO: check if this can be ported for xKS testing
 		It("validates that Argo CD components are based on registry.redhat.io images", func() {
 
 			if fixture.EnvNonOLM() {

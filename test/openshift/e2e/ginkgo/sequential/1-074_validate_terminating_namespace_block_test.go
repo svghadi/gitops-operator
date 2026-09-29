@@ -19,7 +19,7 @@ package sequential
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -30,7 +30,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -63,8 +62,8 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 				},
 				Spec: argov1beta1api.ArgoCDSpec{
 					RBAC: argov1beta1api.ArgoCDRBACSpec{
-						Policy: ptr.To("g, system:authenticated, role:admin"),
-						Scopes: ptr.To("[groups]"),
+						Policy: new("g, system:authenticated, role:admin"),
+						Scopes: new("[groups]"),
 					},
 				},
 			}

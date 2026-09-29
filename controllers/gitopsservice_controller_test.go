@@ -22,9 +22,9 @@ import (
 	"os"
 	"testing"
 
-	argoapp "github.com/argoproj-labs/argocd-operator/api/v1beta1"
-	argocommon "github.com/argoproj-labs/argocd-operator/common"
-	"github.com/argoproj-labs/argocd-operator/controllers/argocd"
+	argoapp "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
+	argocommon "github.com/argoproj-labs/gitops-operator/argocd-operator/common"
+	"github.com/argoproj-labs/gitops-operator/argocd-operator/controllers/argocd"
 	configv1 "github.com/openshift/api/config/v1"
 	consolev1 "github.com/openshift/api/console/v1"
 	routev1 "github.com/openshift/api/route/v1"
@@ -294,7 +294,7 @@ func TestReconcile(t *testing.T) {
 	s := scheme.Scheme
 	addKnownTypesToScheme(s)
 
-	fakeClient := fake.NewFakeClient(util.NewClusterVersion("4.15.1"), newGitopsService())
+	fakeClient := fake.NewFakeClient(util.NewClusterVersion("4.19.0"), newGitopsService())
 	reconciler := newReconcileGitOpsService(fakeClient, s)
 
 	_, err := reconciler.Reconcile(context.TODO(), newRequest("test", "test"))
@@ -538,13 +538,13 @@ func TestReconcile_BackendSecurityContext(t *testing.T) {
 
 	securityContext := deployment.Spec.Template.Spec.Containers[0].SecurityContext
 	want := &corev1.SecurityContext{
-		AllowPrivilegeEscalation: util.BoolPtr(false),
+		AllowPrivilegeEscalation: new(false),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{
 				"ALL",
 			},
 		},
-		RunAsNonRoot: util.BoolPtr(true),
+		RunAsNonRoot: new(true),
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
@@ -1133,8 +1133,9 @@ func addKnownTypesToScheme(scheme *runtime.Scheme) {
 
 func newReconcileGitOpsService(client client.Client, scheme *runtime.Scheme) *ReconcileGitopsService {
 	return &ReconcileGitopsService{
-		Client: client,
-		Scheme: scheme,
+		Client:          client,
+		Scheme:          scheme,
+		PluginNamespace: serviceNamespace,
 	}
 }
 
@@ -1151,6 +1152,66 @@ func assertNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReconcile_PluginVersionSelection(t *testing.T) {
+	defer util.SetConsoleAPIFound(util.IsConsoleAPIFound())
+	util.SetConsoleAPIFound(true)
+
+	tests := []struct {
+		name           string
+		clusterVersion string
+		expectPlugin   bool
+		expectedImage  string
+	}{
+		{
+			name:           "OCP below minimum (4.17) skips plugin entirely",
+			clusterVersion: "4.17.0",
+			expectPlugin:   false,
+		},
+		{
+			name:           "OCP 4.18 installs PF5 plugin",
+			clusterVersion: "4.18.1",
+			expectPlugin:   true,
+			expectedImage:  common.DefaultConsoleImagePF5 + ":" + common.DefaultConsoleVersionPF5,
+		},
+		{
+			name:           "OCP 4.19 installs PF6 plugin",
+			clusterVersion: "4.19.0",
+			expectPlugin:   true,
+			expectedImage:  common.DefaultConsoleImage + ":" + common.DefaultConsoleVersion,
+		},
+		{
+			name:           "OCP 4.20 installs PF6 plugin",
+			clusterVersion: "4.20.0",
+			expectPlugin:   true,
+			expectedImage:  common.DefaultConsoleImage + ":" + common.DefaultConsoleVersion,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := scheme.Scheme
+			addKnownTypesToScheme(s)
+
+			fakeClient := fake.NewFakeClient(util.NewClusterVersion(test.clusterVersion), newGitopsService())
+			reconciler := newReconcileGitOpsService(fakeClient, s)
+
+			_, err := reconciler.Reconcile(context.TODO(), newRequest("test", "test"))
+			assertNoError(t, err)
+
+			pluginDeploy := &appsv1.Deployment{}
+			err = fakeClient.Get(context.TODO(), types.NamespacedName{Name: gitopsPluginName, Namespace: serviceNamespace}, pluginDeploy)
+
+			if !test.expectPlugin {
+				assert.Assert(t, errors.IsNotFound(err), "expected plugin deployment to be absent for OCP %s, but it exists", test.clusterVersion)
+				return
+			}
+
+			assertNoError(t, err)
+			assert.Equal(t, pluginDeploy.Spec.Template.Spec.Containers[0].Image, test.expectedImage)
+		})
 	}
 }
 

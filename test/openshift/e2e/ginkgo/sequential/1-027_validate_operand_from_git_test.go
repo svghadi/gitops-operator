@@ -19,7 +19,7 @@ package sequential
 import (
 	"context"
 
-	"github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	"github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	"github.com/argoproj/argo-cd/gitops-engine/pkg/health"
 	argocdv1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
@@ -42,6 +42,7 @@ import (
 var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 
 	Context("1-027_validate_operand_from_git", func() {
+		// TODO: check if this test can use a new ArgoCD instance instead of the default openshift-gitops instance
 
 		var (
 			ctx              context.Context
@@ -68,7 +69,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			}
 		})
 
-		It("verifies that a custom Argo CD instance can be deployed by the 'openshift-gitops' Argo CD instance. It also verfies that the custom Argo CD instance is able to deploy a simple application", func() {
+		It("verifies that a custom Argo CD instance can be deployed by the 'openshift-gitops' Argo CD instance. It also verfies that the custom Argo CD instance is able to deploy a simple application", Label("openshift"), func() {
 
 			openshiftgitopsArgoCD, err := argocdFixture.GetOpenShiftGitOpsNSArgoCD()
 			Expect(err).ToNot(HaveOccurred())

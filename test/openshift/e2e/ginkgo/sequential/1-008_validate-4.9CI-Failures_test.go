@@ -19,7 +19,7 @@ package sequential
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	argocdv1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -38,6 +38,7 @@ import (
 var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 
 	Context("1-008_validate-4.9CI-Failures", func() {
+		// TODO: check if this test can use a new ArgoCD instance instead of the default openshift-gitops instance
 
 		var (
 			ctx       context.Context

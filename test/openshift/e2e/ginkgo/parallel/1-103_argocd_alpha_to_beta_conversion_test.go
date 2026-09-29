@@ -19,8 +19,8 @@ package parallel
 import (
 	"context"
 
-	argov1alpha1api "github.com/argoproj-labs/argocd-operator/api/v1alpha1"
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1alpha1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1alpha1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -46,7 +46,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("ensures that creation of a v1alpha1 ArgoCD CR with SSO fields will be translated into a v1beta1 ArgoCD CR via webhook", func() {
+		It("ensures that creation of a v1alpha1 ArgoCD CR with SSO fields will be translated into a v1beta1 ArgoCD CR via webhook", Label("openshift"), func() {
 			if fixture.EnvLocalRun() {
 				Skip("When LOCAL_RUN is set, the API upgrade webhook is not running, which is what this test tets. Thus this test should be skipped.")
 				return

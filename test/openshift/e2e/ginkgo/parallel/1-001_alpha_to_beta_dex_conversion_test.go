@@ -19,8 +19,8 @@ package parallel
 import (
 	"context"
 
-	argov1alpha1api "github.com/argoproj-labs/argocd-operator/api/v1alpha1"
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1alpha1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1alpha1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -47,7 +47,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("Ensure dex spec field can be converted between ArgoCD v1alpha1 and v1beta1", func() {
+		It("Ensure dex spec field can be converted between ArgoCD v1alpha1 and v1beta1", Label("openshift"), func() {
 
 			if fixture.EnvLocalRun() {
 				Skip("Conversion via webhook requires the operator to be running on the cluster, which is not the case for a local run")

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	configv1 "github.com/openshift/api/config/v1"
@@ -25,7 +25,7 @@ import (
 func getOCPVersion() string {
 	output, err := osFixture.ExecCommand("oc", "version")
 	Expect(err).ToNot(HaveOccurred())
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if strings.Contains(line, "Server Version:") {
 			return strings.TrimSpace(line[strings.Index(line, ":")+1:])
 		}
@@ -67,7 +67,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 				cleanupFunc()
 			}
 		})
-		It("ensures the conditions in status when external Authentication is enabled on clusters; above 4.20 by default in openshit is enabled", func() {
+		It("ensures the conditions in status when external Authentication is enabled on clusters; above 4.20 by default in openshift is enabled", Label("openshift"), func() {
 			By("creating simple namespace-scoped Argo CD instance")
 			ocVersion := getOCPVersion()
 			Expect(ocVersion).ToNot(BeEmpty())
@@ -121,6 +121,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 
 		})
 
+		// openshiftOAuth is not supported in xKS
 		It("ensures Dex/Keycloak SSO can be enabled and disabled on a namespace-scoped Argo CD instance", func() {
 
 			ns, cleanupFunc = fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()

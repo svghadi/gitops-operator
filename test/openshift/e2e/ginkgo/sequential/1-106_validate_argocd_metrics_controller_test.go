@@ -1,7 +1,7 @@
 package sequential
 
 import (
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -11,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
@@ -42,12 +41,13 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 
 			Eventually(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "openshift-gitops-prometheus-k8s-read-binding", Namespace: "openshift-gitops"}}).Should(k8sFixture.ExistByName())
 
-			// PrometheusRule
+			// PrometheusRules
 			Eventually(&monitoringv1.PrometheusRule{ObjectMeta: metav1.ObjectMeta{Name: "gitops-operator-argocd-alerts", Namespace: "openshift-gitops"}}).Should(k8sFixture.ExistByName())
+			Eventually(&monitoringv1.PrometheusRule{ObjectMeta: metav1.ObjectMeta{Name: "gitops-operator-argocd-sync-loop-alerts", Namespace: "openshift-gitops"}}).Should(k8sFixture.ExistByName())
 
 		}
 
-		It("verifies Argo CD metrics can be disabled and re-enabled", func() {
+		It("verifies Argo CD metrics can be disabled and re-enabled", Label("openshift"), func() {
 
 			By("verifying Argo CD metrics are enabled by default in openshift-gitops")
 
@@ -60,7 +60,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			By("disabling metrics via ArgoCD CR .spec.monitoring.disableMetrics")
 
 			argocdFixture.Update(defaultArgoCD, func(ac *argov1beta1api.ArgoCD) {
-				ac.Spec.Monitoring.DisableMetrics = ptr.To(true)
+				ac.Spec.Monitoring.DisableMetrics = new(true)
 			})
 
 			By("verifying all metrics resources are in disabled state")
@@ -80,10 +80,11 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			Eventually(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "openshift-gitops-prometheus-k8s-read-binding", Namespace: "openshift-gitops"}}).Should(k8sFixture.NotExistByName())
 
 			Eventually(&monitoringv1.PrometheusRule{ObjectMeta: metav1.ObjectMeta{Name: "gitops-operator-argocd-alerts", Namespace: "openshift-gitops"}}).Should(k8sFixture.NotExistByName())
+			Eventually(&monitoringv1.PrometheusRule{ObjectMeta: metav1.ObjectMeta{Name: "gitops-operator-argocd-sync-loop-alerts", Namespace: "openshift-gitops"}}).Should(k8sFixture.NotExistByName())
 
 			By("re-enabling metrics")
 			argocdFixture.Update(defaultArgoCD, func(ac *argov1beta1api.ArgoCD) {
-				ac.Spec.Monitoring.DisableMetrics = ptr.To(false)
+				ac.Spec.Monitoring.DisableMetrics = new(false)
 			})
 
 			By("verifying metrics are re-enabled")

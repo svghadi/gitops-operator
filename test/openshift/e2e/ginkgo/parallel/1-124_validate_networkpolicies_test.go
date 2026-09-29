@@ -19,8 +19,8 @@ package parallel
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
-	"github.com/argoproj-labs/argocd-operator/common"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
+	"github.com/argoproj-labs/gitops-operator/argocd-operator/common"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -31,7 +31,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -83,7 +82,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 						Enabled: true,
 					},
 					ApplicationSet: &argov1beta1api.ArgoCDApplicationSet{
-						Enabled: ptr.To(true),
+						Enabled: new(true),
 					},
 					SSO: &argov1beta1api.ArgoCDSSOSpec{
 						Provider: argov1beta1api.SSOProviderTypeDex,

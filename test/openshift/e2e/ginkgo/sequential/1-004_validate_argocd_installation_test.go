@@ -17,7 +17,7 @@ limitations under the License.
 package sequential
 
 import (
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -28,12 +28,13 @@ import (
 var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 
 	Context("1-004_validate_argocd_installation", func() {
+		// TODO: check if this test can use a new ArgoCD instance instead of the default openshift-gitops instance
 
 		BeforeEach(func() {
 			fixture.EnsureSequentialCleanSlate()
 		})
 
-		It("verifies that default openshift-gitops Argo CD instance becomes available after modifying .spec.controller.processors.operation value", func() {
+		It("verifies that default openshift-gitops Argo CD instance becomes available after modifying .spec.controller.processors.operation value", Label("openshift"), func() {
 
 			By("verifying default openshift-gitops Argo CD instance is available")
 			argocd, err := argocdFixture.GetOpenShiftGitOpsNSArgoCD()

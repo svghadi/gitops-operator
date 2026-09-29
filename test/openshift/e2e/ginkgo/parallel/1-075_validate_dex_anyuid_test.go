@@ -19,7 +19,7 @@ package parallel
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -51,7 +51,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("validates that dex runs when serviceaccount has anyuid SCC", func() {
+		It("validates that dex runs when serviceaccount has anyuid SCC", Label("openshift"), func() {
 
 			By("creating an Argo CD instance with Dex OpenShift Auth enabled")
 			ns, cleanupFunc := fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()

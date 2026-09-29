@@ -20,12 +20,12 @@ import (
 	"context"
 	"strings"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
 	argocdFixture "github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture/argocd"
-	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture/node"
+	nodeFixture "github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture/node"
 	fixtureUtils "github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,12 +49,12 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 
 		})
 
-		It("verifies that HA pods have expected SSC", func() {
+		It("verifies that HA pods have expected SSC", Label("openshift"), func() {
 
 			fixture.EnsureRunningOnOpenShift() // SSC requires OpenShift
 
 			// This test enables HA redis and thus requires at least 3 nodes
-			node.ExpectHasAtLeastXNodes(3)
+			nodeFixture.ExpectHasAtLeastXNodes(3)
 
 			By("creating basic Argo CD instance with HA enabled and waiting for it to be available")
 			ns, cleanupFunc := fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()

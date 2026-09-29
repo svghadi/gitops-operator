@@ -19,7 +19,7 @@ package parallel
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -146,7 +146,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 				statusProcessorsCount := 0
 				kubectlLimitCount := 0
 
-				for i := 0; i < len(cmd); i++ {
+				for i := range cmd {
 					if cmd[i] == "--status-processors" {
 						statusProcessorsCount++
 					}
@@ -180,7 +180,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 				cmd := appControllerSS.Spec.Template.Spec.Containers[0].Command
 
 				metricVals := []string{}
-				for i := 0; i < len(cmd); i++ {
+				for i := range cmd {
 					if cmd[i] == "--metrics-application-labels" && i+1 < len(cmd) {
 						metricVals = append(metricVals, cmd[i+1])
 					}

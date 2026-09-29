@@ -31,7 +31,7 @@ import (
 
 	imageUpdaterApi "github.com/argoproj-labs/argocd-image-updater/api/v1alpha1"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
 	applicationFixture "github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture/application"
 	argocdFixture "github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture/argocd"
@@ -43,7 +43,6 @@ import (
 )
 
 var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
-
 	Context("1-121_validate_image_updater_test", func() {
 
 		var (
@@ -81,21 +80,21 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			By("creating simple namespace-scoped Argo CD instance with image updater enabled")
 			ns, cleanupFunc = fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()
 
-			By("ensuring default service account has anyuid SCC permission")
-			serviceAccountUser := "system:serviceaccount:" + ns.Name + ":default"
-			output, err := osFixture.ExecCommand("oc", "auth", "can-i", "use", "scc/anyuid", "--as", serviceAccountUser)
-			hasPermission := false
-			if err == nil && len(output) > 0 {
-				// Check if the service account user is already in the users list
-				// Remove quotes and whitespace for comparison
-				output = strings.TrimSpace(strings.Trim(output, "'\""))
-				if strings.Contains(output, serviceAccountUser) {
-					hasPermission = true
+			if fixture.RunningOnOpenShift() {
+				By("ensuring default service account has anyuid SCC permission")
+				serviceAccountUser := "system:serviceaccount:" + ns.Name + ":default"
+				output, err := osFixture.ExecCommand("oc", "auth", "can-i", "use", "scc/anyuid", "--as", serviceAccountUser)
+				hasPermission := false
+				if err == nil && len(output) > 0 {
+					output = strings.TrimSpace(strings.Trim(output, "'\""))
+					if strings.Contains(output, serviceAccountUser) {
+						hasPermission = true
+					}
 				}
-			}
-			if !hasPermission {
-				_, err := osFixture.ExecCommand("oc", "adm", "policy", "add-scc-to-user", "anyuid", "-z", "default", "-n", ns.Name)
-				Expect(err).NotTo(HaveOccurred(), "Failed to add anyuid SCC to default service account")
+				if !hasPermission {
+					_, err := osFixture.ExecCommand("oc", "adm", "policy", "add-scc-to-user", "anyuid", "-z", "default", "-n", ns.Name)
+					Expect(err).NotTo(HaveOccurred(), "Failed to add anyuid SCC to default service account")
+				}
 			}
 
 			argoCD := &argov1beta1api.ArgoCD{

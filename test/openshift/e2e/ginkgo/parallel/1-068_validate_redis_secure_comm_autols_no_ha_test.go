@@ -3,7 +3,7 @@ package parallel
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -40,7 +40,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			fixture.OutputDebugOnFail(ns)
 		})
 
-		It("validates that the operator configures Redis using auto-gen TLS certificates when HA is disabled", func() {
+		It("validates that the operator configures Redis using auto-gen TLS certificates when HA is disabled", Label("openshift"), func() {
 
 			expectComponentsAreRunning := func() {
 				deploymentsShouldExist := []string{"argocd-redis", "argocd-server", "argocd-repo-server"}

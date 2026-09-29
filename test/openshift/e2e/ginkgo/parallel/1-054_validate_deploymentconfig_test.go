@@ -19,7 +19,7 @@ package parallel
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	"github.com/argoproj/argo-cd/gitops-engine/pkg/health"
 	"github.com/argoproj/argo-cd/gitops-engine/pkg/sync/common"
 	appv1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
@@ -49,7 +49,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("verifies a DeploymentConfig can be deployed by Argo CD", func() {
+		It("verifies a DeploymentConfig can be deployed by Argo CD", Label("openshift"), func() {
 
 			By("creating simple namespace-scoped Argo CD instance")
 			ns, cleanupFunc := fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()

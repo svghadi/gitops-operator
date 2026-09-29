@@ -19,8 +19,8 @@ package parallel
 import (
 	"context"
 
-	argov1alpha1api "github.com/argoproj-labs/argocd-operator/api/v1alpha1"
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1alpha1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1alpha1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -46,7 +46,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("verifies that resource customization is dropped in conversion from ArgoCD v1alpha1 to v1beta1", func() {
+		It("verifies that resource customization is dropped in conversion from ArgoCD v1alpha1 to v1beta1", Label("openshift"), func() {
 
 			By("creating simple namespace-scoped Argo CD instance via v1alpha1 API, with resourcecustomization and resourcehealthcheck")
 			ns, cleanupFunc := fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()

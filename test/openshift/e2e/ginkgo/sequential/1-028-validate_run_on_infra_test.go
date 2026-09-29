@@ -3,7 +3,7 @@ package sequential
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	gitopsoperatorv1alpha1 "github.com/redhat-developer/gitops-operator/api/v1alpha1"
@@ -25,6 +25,7 @@ import (
 var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 
 	Context("1-028-validate_run_on_infra_test", func() {
+		// TODO: check if this test can use a new ArgoCD instance instead of the default openshift-gitops instance
 
 		var (
 			ctx       context.Context
@@ -37,7 +38,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("validates that Argo CD runs on infra nodes", func() {
+		It("validates that Argo CD runs on infra nodes", Label("openshift"), func() {
 
 			By("enabling run on infra on GitOpsService CR")
 			gitopsService := &gitopsoperatorv1alpha1.GitopsService{

@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
-	"github.com/argoproj-labs/argocd-operator/common"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
+	"github.com/argoproj-labs/gitops-operator/argocd-operator/common"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -72,7 +72,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("verifies that the Dex client secret is sourced from a short-lived TokenRequest token and is correctly set in argocd-secret", func() {
+		It("verifies that the Dex client secret is sourced from a short-lived TokenRequest token and is correctly set in argocd-secret", Label("openshift"), func() {
 
 			By("creating simple Argo CD instance with Dex and Openshift OAuth enabled")
 			ns, cleanupFunc := fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()

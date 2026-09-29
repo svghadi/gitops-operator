@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -30,7 +30,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -71,7 +70,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 				Spec: argov1beta1api.ArgoCDSpec{
 					Controller: argov1beta1api.ArgoCDApplicationControllerSpec{
 						Sharding: argov1beta1api.ArgoCDApplicationControllerShardSpec{
-							DynamicScalingEnabled: ptr.To(true),
+							DynamicScalingEnabled: new(true), //nolint:staticcheck // SA1019: deprecated but testing legacy config
 							MinShards:             1,
 							MaxShards:             4,
 							ClustersPerShard:      1,

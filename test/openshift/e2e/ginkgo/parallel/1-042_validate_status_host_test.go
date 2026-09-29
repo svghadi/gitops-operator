@@ -19,7 +19,7 @@ package parallel
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	routev1 "github.com/openshift/api/route/v1"
@@ -49,7 +49,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("verifies that .status.host of ArgoCD matches .spec.host of Route, and status is updated when Route is removed", func() {
+		It("verifies that .status.host of ArgoCD matches .spec.host of Route, and status is updated when Route is removed", Label("openshift"), func() {
 
 			By("creating simple namespace-scoped Argo CD instance")
 			ns, cleanupFunc := fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()

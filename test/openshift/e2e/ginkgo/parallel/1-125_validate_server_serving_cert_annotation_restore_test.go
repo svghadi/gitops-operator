@@ -18,12 +18,12 @@ package parallel
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/argoproj-labs/argocd-operator/common"
-	certFixture "github.com/argoproj-labs/argocd-operator/tests/ginkgo/fixture/certificate"
+	"github.com/argoproj-labs/gitops-operator/argocd-operator/common"
+	certFixture "github.com/argoproj-labs/gitops-operator/argocd-operator/tests/ginkgo/fixture/certificate"
 	routev1 "github.com/openshift/api/route/v1"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
 	argocdFixture "github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture/argocd"
@@ -49,7 +49,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			ctx = context.Background()
 		})
 
-		It("restores service.beta.openshift.io/serving-cert-secret-name when Route TLS returns from passthrough to default reencrypt", func() {
+		It("restores service.beta.openshift.io/serving-cert-secret-name when Route TLS returns from passthrough to default reencrypt", Label("openshift"), func() {
 			ns, nsCleanup := fixture.CreateRandomE2ETestNamespaceWithCleanupFunc()
 			defer nsCleanup()
 
@@ -124,7 +124,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 
 		})
 
-		It("does not add serving-cert annotation when argocd-server-tls already exists as a user-managed secret (not Service CA)", func() {
+		It("does not add serving-cert annotation when argocd-server-tls already exists as a user-managed secret (not Service CA)", Label("openshift"), func() {
 			certPem, keyPem, err := certFixture.GenerateCert()
 			Expect(err).NotTo(HaveOccurred())
 

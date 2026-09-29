@@ -19,7 +19,7 @@ package parallel
 import (
 	"context"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/redhat-developer/gitops-operator/test/openshift/e2e/ginkgo/fixture"
@@ -58,7 +58,8 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 			fixture.OutputDebugOnFail(ns)
 		})
 
-		It("verifying when HA is enabled that Argo CD starts successfully in HA mode, and that AutoTLS can be enabled", func() {
+		// autoTLS is not supported in xKS, only supported on openshift
+		It("verifying when HA is enabled that Argo CD starts successfully in HA mode, and that AutoTLS can be enabled", Label("openshift", "HA"), func() {
 
 			By("verifying we are running on a cluster with at least 3 nodes. This is required for Redis HA")
 			nodeFixture.ExpectHasAtLeastXNodes(3)

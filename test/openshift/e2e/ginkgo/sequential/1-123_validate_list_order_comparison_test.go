@@ -42,6 +42,7 @@ import (
 const testReconciliationTriggerAnnotation = "test-reconciliation-trigger"
 const gitopsPluginDeploymentName = "gitops-plugin"
 const openshiftGitopsNamespace = "openshift-gitops"
+const openshiftGitopsOperatorNamespace = "openshift-gitops-operator"
 
 // ocpVersionLessThanPluginMin returns true when OCP version is below the plugin-reconcile minimum.
 // Same check as gitopsservice_controller.go (realMajorVersion < startMajorVersion || (realMajorVersion == startMajorVersion && realMinorVersion < startMinorVersion)).
@@ -99,7 +100,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			if CurrentSpecReport().Failed() {
 				kubeClient, _, err := fixtureUtils.GetE2ETestKubeClientWithError()
 				if err == nil {
-					pluginDepl := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gitopsPluginDeploymentName, Namespace: openshiftGitopsNamespace}}
+					pluginDepl := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gitopsPluginDeploymentName, Namespace: openshiftGitopsOperatorNamespace}}
 					pluginErr := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(pluginDepl), pluginDepl)
 					deplGen, observedGen := int64(0), int64(0)
 					if pluginErr == nil {
@@ -117,7 +118,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			fixture.OutputDebugOnFail(openshiftGitopsNamespace)
 		})
 
-		It("Should not trigger updates when only list order differs", func() {
+		It("Should not trigger updates when only list order differs", Label("openshift"), func() {
 			gitopsService := &gitopsoperatorv1alpha1.GitopsService{
 				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
 			}
@@ -126,13 +127,13 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			pluginDeployment := &appsv1.Deployment{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      gitopsPluginDeploymentName,
-					Namespace: openshiftGitopsNamespace,
+					Namespace: openshiftGitopsOperatorNamespace,
 				},
 			}
 			Eventually(pluginDeployment, "5m", "5s").Should(k8sFixture.ExistByName(),
-				"deployment %s never showed in %s (5m)", gitopsPluginDeploymentName, openshiftGitopsNamespace)
+				"deployment %s never showed in %s (5m)", gitopsPluginDeploymentName, openshiftGitopsOperatorNamespace)
 			Eventually(pluginDeployment, "60s", "5s").Should(deploymentFixture.HaveReadyReplicas(1),
-				"deployment %s in %s not ready after 60s", gitopsPluginDeploymentName, openshiftGitopsNamespace)
+				"deployment %s in %s not ready after 60s", gitopsPluginDeploymentName, openshiftGitopsOperatorNamespace)
 
 			By("capturing initial state before simulating etcd order change")
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pluginDeployment), pluginDeployment)).To(Succeed())
@@ -214,7 +215,7 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 
 		})
 
-		It("Should trigger updates when actual changes are made", func() {
+		It("Should trigger updates when actual changes are made", Label("openshift"), func() {
 			gitopsService := &gitopsoperatorv1alpha1.GitopsService{
 				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
 			}
@@ -223,13 +224,13 @@ var _ = Describe("GitOps Operator Sequential E2E Tests", func() {
 			pluginDeployment := &appsv1.Deployment{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      gitopsPluginDeploymentName,
-					Namespace: openshiftGitopsNamespace,
+					Namespace: openshiftGitopsOperatorNamespace,
 				},
 			}
 			Eventually(pluginDeployment, "5m", "5s").Should(k8sFixture.ExistByName(),
-				"deployment %s never showed in %s (5m)", gitopsPluginDeploymentName, openshiftGitopsNamespace)
+				"deployment %s never showed in %s (5m)", gitopsPluginDeploymentName, openshiftGitopsOperatorNamespace)
 			Eventually(pluginDeployment, "60s", "5s").Should(deploymentFixture.HaveReadyReplicas(1),
-				"deployment %s in %s not ready after 60s", gitopsPluginDeploymentName, openshiftGitopsNamespace)
+				"deployment %s in %s not ready after 60s", gitopsPluginDeploymentName, openshiftGitopsOperatorNamespace)
 
 			By("capturing initial state before making actual change")
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pluginDeployment), pluginDeployment)).To(Succeed())

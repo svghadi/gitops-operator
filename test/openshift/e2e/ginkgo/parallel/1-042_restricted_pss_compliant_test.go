@@ -20,7 +20,7 @@ import (
 	"context"
 	"strings"
 
-	argov1beta1api "github.com/argoproj-labs/argocd-operator/api/v1beta1"
+	argov1beta1api "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -31,7 +31,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -87,7 +86,7 @@ var _ = Describe("GitOps Operator Parallel E2E Tests", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: "argocd", Namespace: ns.Name},
 				Spec: argov1beta1api.ArgoCDSpec{
 					ApplicationSet: &argov1beta1api.ArgoCDApplicationSet{
-						Enabled: ptr.To(true),
+						Enabled: new(true),
 					},
 					Notifications: argov1beta1api.ArgoCDNotifications{
 						Enabled: true,
