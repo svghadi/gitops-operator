@@ -1,0 +1,20 @@
+{
+  "apiVersion": "agentic.openshift.io/v1alpha1",
+  "kind": "AnalysisResult",
+  "metadata": {"name": "diagnosis-analysis-2", "namespace": "lightspeed"},
+  "spec": {"agenticRunName": "diagnosis"},
+  "status": {
+    "conditions": [{"type": "Completed", "status": "True", "reason": "Succeeded", "message": "", "lastTransitionTime": "2026-09-29T12:02:00Z"}],
+    "actionRequired": "True",
+    "options": [{
+      "title": "Correct the image reference",
+      "summary": "Use the published image tag",
+      "diagnosis": {"summary": "The pod cannot pull the requested image.", "rootCause": "The image tag does not exist.", "confidence": "High"},
+      "remediationPlan": {
+        "description": "Update the declarative deployment image in Git.",
+        "risk": "Low",
+        "actions": [{"type": "pre-check", "description": "Inspect the current deployment", "command": "oc get deployment web -n workload -o yaml"}]
+      }
+    }]
+  }
+}

@@ -52,7 +52,7 @@ spec:
         - name: AGENTIC_ANALYSIS_AGENT
           value: default
         - name: AGENTIC_TRIGGER_IMAGE
-          value: quay.io/mangaal/agentic-trigger:latest
+          value: quay.io/mangaal/agentic-trigger:skill-test
         image: controller:latest
         livenessProbe:
           httpGet:

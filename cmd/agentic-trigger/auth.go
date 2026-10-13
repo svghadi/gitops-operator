@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -12,16 +13,28 @@ import (
 
 const (
 	triggerAutomatic = "automatic"
-	triggerManual    = "manual"
+
+	// The expected caller SA name — a dedicated identity with no RBAC permissions,
+	// used only by ArgoCD Notifications to call the webhook.
+	notificationsSAName = "agentic-trigger-notifications"
 )
 
-type CallerIdentity struct {
-	TriggerType string
-	Username    string
-	UID         string
+// AuthResult distinguishes authentication failure from authorization failure
+// so the handler can return the correct HTTP status code.
+type AuthResult struct {
+	// Authenticated is true if the token was valid.
+	Authenticated bool
+	// Authorized is true if the caller is the expected SA.
+	Authorized bool
 }
 
-func authenticateCaller(ctx context.Context, client kubernetes.Interface, token string, logger logr.Logger) (*CallerIdentity, error) {
+// authenticateCaller verifies the bearer token via TokenReview (authentication)
+// and checks that the caller is the dedicated notifications SA (authorization).
+//
+// TokenReview is performed without a custom audience: the operator injects a
+// kubernetes.io/service-account-token Secret, which has no `aud` claim.
+// Requiring audience "agentic-trigger" makes every webhook return 401.
+func authenticateCaller(ctx context.Context, client kubernetes.Interface, token string, allowedNS string, logger logr.Logger) *AuthResult {
 	review := &authv1.TokenReview{
 		Spec: authv1.TokenReviewSpec{
 			Token: token,
@@ -30,38 +43,35 @@ func authenticateCaller(ctx context.Context, client kubernetes.Interface, token 
 
 	result, err := client.AuthenticationV1().TokenReviews().Create(ctx, review, metav1.CreateOptions{})
 	if err != nil {
-		return nil, err
+		logger.Error(err, "TokenReview API call failed")
+		return nil // signals server error to caller
 	}
 
 	if !result.Status.Authenticated {
-		return nil, nil
+		logger.Info("token not authenticated", "error", result.Status.Error)
+		return &AuthResult{Authenticated: false}
 	}
 
 	username := result.Status.User.Username
-	uid := result.Status.User.UID
 
-	triggerType := triggerManual
-	if isServiceAccount(username) {
-		triggerType = triggerAutomatic
-		logger.V(1).Info("caller identified as service account", "username", username)
-	} else {
-		logger.V(1).Info("caller identified as user", "username", username)
+	// Authorization: only the dedicated notifications SA is allowed
+	expectedSA := fmt.Sprintf("system:serviceaccount:%s:%s", allowedNS, notificationsSAName)
+	if username != expectedSA {
+		logger.Info("caller authenticated but not authorized", "username", username, "expected", expectedSA)
+		return &AuthResult{Authenticated: true, Authorized: false}
 	}
 
-	return &CallerIdentity{
-		TriggerType: triggerType,
-		Username:    username,
-		UID:         uid,
-	}, nil
-}
+	logger.V(1).Info("caller authenticated and authorized", "username", username)
 
-func isServiceAccount(username string) bool {
-	return strings.HasPrefix(username, "system:serviceaccount:")
+	return &AuthResult{
+		Authenticated: true,
+		Authorized:    true,
+	}
 }
 
 func extractBearerToken(authHeader string) string {
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		return strings.TrimPrefix(authHeader, "Bearer ")
+	if token, ok := strings.CutPrefix(authHeader, "Bearer "); ok {
+		return token
 	}
 	return ""
 }

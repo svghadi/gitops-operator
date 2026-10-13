@@ -13,4 +13,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: quay.io/mangaal/gitops-operator
-  newTag: latest
+  newTag: skill-test

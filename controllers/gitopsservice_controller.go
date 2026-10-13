@@ -90,7 +90,8 @@ func (r *ReconcileGitopsService) SetupWithManager(mgr ctrl.Manager) error {
 	pred := predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			// Ignore updates to CR status in which case metadata.Generation does not change
-			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() ||
+				agenticAnnotationsChanged(e.ObjectOld, e.ObjectNew)
 		},
 		DeleteFunc: func(e event.DeleteEvent) bool {
 			// Evaluates to false if the object has been confirmed deleted.
@@ -113,14 +114,21 @@ func (r *ReconcileGitopsService) SetupWithManager(mgr ctrl.Manager) error {
 		For(&pipelinesv1alpha1.GitopsService{}, builder.WithPredicates(pred)).
 		Owns(&rbacv1.ClusterRoleBinding{}).
 		Owns(&rbacv1.ClusterRole{}).
+		Owns(&rbacv1.Role{}).
+		Owns(&rbacv1.RoleBinding{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&appsv1.Deployment{}, builder.WithPredicates(pred)).
-		Owns(&corev1.Service{}, builder.WithPredicates(pred))
+		Owns(&corev1.Service{})
 
 	if util.IsRouteAPIFound() {
 		bldr = bldr.Owns(&routev1.Route{}, builder.WithPredicates(pred))
 	}
+
+	bldr = bldr.
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests)).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests)).
+		Watches(&argov1alpha1.NotificationsConfiguration{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests))
 
 	return bldr.
 		Watches(
@@ -236,7 +244,7 @@ type ReconcileGitopsService struct {
 
 // Reconcile reads that state of the cluster for a GitopsService object and makes changes based on the state read
 // and what is in the GitopsService.Spec
-func (r *ReconcileGitopsService) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
+func (r *ReconcileGitopsService) Reconcile(ctx context.Context, request reconcile.Request) (result reconcile.Result, reconcileErr error) {
 	reqLogger := logs.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling GitopsService")
 
@@ -310,9 +318,15 @@ func (r *ReconcileGitopsService) Reconcile(ctx context.Context, request reconcil
 		return result, err
 	}
 
-	if result, err := r.reconcileAgenticTriggerService(gitopsserviceNamespacedName, instance, reqLogger); err != nil {
-		return result, err
+	agenticResult, err := r.reconcileAgenticTriggerService(gitopsserviceNamespacedName, instance, reqLogger)
+	if err != nil {
+		return agenticResult, err
 	}
+	defer func() {
+		if reconcileErr == nil && agenticResult.RequeueAfter > 0 && (result.RequeueAfter == 0 || agenticResult.RequeueAfter < result.RequeueAfter) {
+			result.RequeueAfter = agenticResult.RequeueAfter
+		}
+	}()
 
 	if r.PluginNamespace != namespace {
 		pluginNS := &corev1.Namespace{}
@@ -1120,387 +1134,28 @@ func ensureInfraNodeSelectorAnnotation(namespace *corev1.Namespace, runOnInfra b
 }
 
 const (
-	agenticTriggerServiceName    = "agentic-trigger"
-	agenticTriggerImageEnvName   = "AGENTIC_TRIGGER_IMAGE"
-	agenticTriggerDefaultImage   = "quay.io/redhat-developer/gitops-operator-agentic-trigger:latest"
-	agenticSkillsImageEnvName    = "AGENTIC_SKILLS_IMAGE"
-	agenticIntegrationEnabledEnv = "ENABLE_AGENTIC_GITOPS_INTEGRATION"
-	agenticTriggerTLSEnv         = "AGENTIC_TRIGGER_TLS_ENABLED"
+	agenticTriggerServiceName         = "agentic-trigger"
+	agenticTriggerNotificationsSAName = "agentic-trigger-notifications"
+	agenticTriggerImageEnvName        = "AGENTIC_TRIGGER_IMAGE"
+	agenticTriggerDefaultImage        = "quay.io/redhat-developer/gitops-operator-agentic-trigger:latest"
+	agenticSkillsImageEnvName         = "AGENTIC_SKILLS_IMAGE"
+	agenticIntegrationEnabledEnv      = "ENABLE_AGENTIC_GITOPS_INTEGRATION"
+	agenticTriggerTLSEnv              = "AGENTIC_TRIGGER_TLS_ENABLED"
 )
-
-func (r *ReconcileGitopsService) reconcileAgenticTriggerService(
-	gitopsserviceNamespacedName types.NamespacedName,
-	instance *pipelinesv1alpha1.GitopsService,
-	reqLogger logr.Logger,
-) (reconcile.Result, error) {
-
-	enabled := strings.EqualFold(os.Getenv(agenticIntegrationEnabledEnv), "true")
-	if !enabled {
-		if annotations := instance.GetAnnotations(); annotations != nil {
-			enabled = strings.EqualFold(annotations["gitops.openshift.io/agentic-integration-enabled"], "true")
-		}
-	}
-	if !enabled {
-		return reconcile.Result{}, nil
-	}
-
-	tlsEnabled := !strings.EqualFold(os.Getenv(agenticTriggerTLSEnv), "false")
-
-	ns := gitopsserviceNamespacedName.Namespace
-
-	// ServiceAccount
-	sa := newAgenticTriggerServiceAccount(ns)
-	if err := r.ensureResource(sa, "ServiceAccount", reqLogger); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	// ClusterRole
-	cr := newAgenticTriggerClusterRole()
-	existingCR := &rbacv1.ClusterRole{}
-	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: cr.Name}, existingCR); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("Creating agentic-trigger ClusterRole", "Name", cr.Name)
-			if err := r.Client.Create(context.TODO(), cr); err != nil {
-				return reconcile.Result{}, err
-			}
-		} else {
-			return reconcile.Result{}, err
-		}
-	} else if !reflect.DeepEqual(existingCR.Rules, cr.Rules) {
-		existingCR.Rules = cr.Rules
-		reqLogger.Info("Updating agentic-trigger ClusterRole", "Name", cr.Name)
-		if err := r.Client.Update(context.TODO(), existingCR); err != nil {
-			return reconcile.Result{}, err
-		}
-	}
-
-	// ClusterRoleBinding
-	crb := newAgenticTriggerClusterRoleBinding(ns)
-	if err := r.ensureResource(crb, "ClusterRoleBinding", reqLogger); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	// Role in agentic run namespace for creating AgenticRuns
-	runNS := os.Getenv("AGENTIC_RUN_NAMESPACE")
-	if runNS == "" {
-		runNS = "openshift-lightspeed"
-	}
-	role := newAgenticTriggerRole(runNS)
-	existingRole := &rbacv1.Role{}
-	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: role.Name, Namespace: role.Namespace}, existingRole); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("Creating agentic-trigger Role", "Namespace", role.Namespace, "Name", role.Name)
-			if err := r.Client.Create(context.TODO(), role); err != nil {
-				return reconcile.Result{}, err
-			}
-		} else {
-			return reconcile.Result{}, err
-		}
-	} else if !reflect.DeepEqual(existingRole.Rules, role.Rules) {
-		existingRole.Rules = role.Rules
-		if err := r.Client.Update(context.TODO(), existingRole); err != nil {
-			return reconcile.Result{}, err
-		}
-	}
-
-	// RoleBinding in agentic run namespace
-	rb := newAgenticTriggerRoleBinding(runNS, ns)
-	if err := r.ensureResource(rb, "RoleBinding", reqLogger); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	// Deployment
-	deploy := newAgenticTriggerDeployment(ns, tlsEnabled)
-	existingDeploy := &appsv1.Deployment{}
-	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, existingDeploy); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("Creating agentic-trigger Deployment", "Namespace", deploy.Namespace)
-			if err := r.Client.Create(context.TODO(), deploy); err != nil {
-				return reconcile.Result{}, err
-			}
-		} else {
-			return reconcile.Result{}, err
-		}
-	} else {
-		changed := false
-		desiredImage := deploy.Spec.Template.Spec.Containers[0].Image
-		if existingDeploy.Spec.Template.Spec.Containers[0].Image != desiredImage {
-			existingDeploy.Spec.Template.Spec.Containers[0].Image = desiredImage
-			changed = true
-		}
-		if existingDeploy.Spec.Template.Spec.Containers[0].ImagePullPolicy != deploy.Spec.Template.Spec.Containers[0].ImagePullPolicy {
-			existingDeploy.Spec.Template.Spec.Containers[0].ImagePullPolicy = deploy.Spec.Template.Spec.Containers[0].ImagePullPolicy
-			changed = true
-		}
-		if !reflect.DeepEqual(existingDeploy.Spec.Template.Spec.Containers[0].Env, deploy.Spec.Template.Spec.Containers[0].Env) {
-			existingDeploy.Spec.Template.Spec.Containers[0].Env = deploy.Spec.Template.Spec.Containers[0].Env
-			changed = true
-		}
-		if changed {
-			reqLogger.Info("Updating agentic-trigger Deployment", "Namespace", deploy.Namespace)
-			if err := r.Client.Update(context.TODO(), existingDeploy); err != nil {
-				return reconcile.Result{}, err
-			}
-		}
-	}
-
-	// Service
-	svc := newAgenticTriggerService(ns, tlsEnabled)
-	existingSvc := &corev1.Service{}
-	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}, existingSvc); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("Creating agentic-trigger Service", "Namespace", svc.Namespace)
-			if err := r.Client.Create(context.TODO(), svc); err != nil {
-				return reconcile.Result{}, err
-			}
-		} else {
-			return reconcile.Result{}, err
-		}
-	}
-
-	// Configure ArgoCD Notifications for automatic triggers
-	if err := r.ensureAgenticNotificationConfig(ns, tlsEnabled, reqLogger); err != nil {
-		reqLogger.Error(err, "failed to configure agentic notification trigger")
-	}
-
-	// Ensure SA token secret exists and inject into notifications secret
-	if err := r.ensureAgenticTriggerToken(ns, reqLogger); err != nil {
-		reqLogger.Error(err, "failed to ensure agentic-trigger token")
-	}
-
-	// Inject service-serving CA into argocd-tls-certs-cm (only needed when TLS is enabled)
-	if tlsEnabled {
-		if err := r.ensureAgenticTriggerTLSTrust(ns, reqLogger); err != nil {
-			reqLogger.Error(err, "failed to ensure agentic-trigger TLS trust")
-		}
-	}
-
-	return reconcile.Result{}, nil
-}
-
-func (r *ReconcileGitopsService) ensureResource(obj client.Object, kind string, reqLogger logr.Logger) error {
-	key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
-	existing := obj.DeepCopyObject().(client.Object)
-	if err := r.Client.Get(context.TODO(), key, existing); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("Creating "+kind, "Name", obj.GetName(), "Namespace", obj.GetNamespace())
-			return r.Client.Create(context.TODO(), obj)
-		}
-		return err
-	}
-	return nil
-}
-
-const (
-	agenticNotifTriggerKey      = "trigger.on-health-degraded"
-	agenticNotifTemplateKey     = "template.agentic-diagnose"
-	agenticNotifServiceKey      = "service.webhook.agentic-trigger"
-	agenticNotifSubscriptionKey = "subscriptions"
-
-	defaultNotificationsConfigurationName = "default-notifications-configuration"
-)
-
-func (r *ReconcileGitopsService) ensureAgenticNotificationConfig(namespace string, tlsEnabled bool, reqLogger logr.Logger) error {
-	nc := &argov1alpha1.NotificationsConfiguration{}
-
-	// Get the NotificationsConfiguration CR
-	ncName := defaultNotificationsConfigurationName
-	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: ncName, Namespace: namespace}, nc); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("NotificationsConfiguration CR not found, skipping agentic notification config", "Name", ncName, "Namespace", namespace)
-			return nil
-		}
-		return err
-	}
-
-	triggerValue := "- when: app.status.health.status == 'Degraded'\n  send: [agentic-diagnose]\n" +
-		"- when: app.status.health.status == 'Missing'\n  send: [agentic-diagnose]\n" +
-		"- when: app.status.health.status == 'Unknown'\n  send: [agentic-diagnose]\n"
-	templateValue := "webhook:\n  agentic-trigger:\n    method: POST\n    path: /api/v1/diagnose\n    body: |\n      {\"application\":\"{{.app.metadata.name}}\",\"applicationNamespace\":\"{{.app.metadata.namespace}}\",\"destinationNamespace\":\"{{.app.spec.destination.namespace}}\",\"syncStatus\":\"{{.app.status.sync.status}}\",\"healthStatus\":\"{{.app.status.health.status}}\",\"revision\":\"{{.app.status.sync.revision}}\"}\n"
-	var serviceValue string
-	if tlsEnabled {
-		serviceValue = fmt.Sprintf("url: https://%s.%s.svc:8443\nheaders:\n- name: Authorization\n  value: Bearer $agentic-trigger-token", agenticTriggerServiceName, namespace)
-	} else {
-		serviceValue = fmt.Sprintf("url: http://%s.%s.svc:8080\nheaders:\n- name: Authorization\n  value: Bearer $agentic-trigger-token", agenticTriggerServiceName, namespace)
-	}
-
-	changed := false
-
-	if nc.Spec.Triggers == nil {
-		nc.Spec.Triggers = make(map[string]string)
-	}
-	if nc.Spec.Triggers[agenticNotifTriggerKey] != triggerValue {
-		nc.Spec.Triggers[agenticNotifTriggerKey] = triggerValue
-		changed = true
-	}
-
-	if nc.Spec.Templates == nil {
-		nc.Spec.Templates = make(map[string]string)
-	}
-	if nc.Spec.Templates[agenticNotifTemplateKey] != templateValue {
-		nc.Spec.Templates[agenticNotifTemplateKey] = templateValue
-		changed = true
-	}
-
-	if nc.Spec.Services == nil {
-		nc.Spec.Services = make(map[string]string)
-	}
-	if nc.Spec.Services[agenticNotifServiceKey] != serviceValue {
-		nc.Spec.Services[agenticNotifServiceKey] = serviceValue
-		changed = true
-	}
-
-	// Global default subscription: all apps automatically receive on-health-degraded
-	// notifications via the agentic-trigger webhook (no per-app annotation needed).
-	subscriptionValue := "- recipients:\n  - agentic-trigger\n  triggers:\n  - on-health-degraded\n"
-	if nc.Spec.Subscriptions == nil {
-		nc.Spec.Subscriptions = make(map[string]string)
-	}
-	if nc.Spec.Subscriptions[agenticNotifSubscriptionKey] != subscriptionValue {
-		nc.Spec.Subscriptions[agenticNotifSubscriptionKey] = subscriptionValue
-		changed = true
-	}
-
-	if changed {
-		reqLogger.Info("Updating NotificationsConfiguration CR with agentic trigger config", "Name", ncName, "Namespace", namespace)
-		return r.Client.Update(context.TODO(), nc)
-	}
-	return nil
-}
-
-const (
-	agenticTriggerTokenSecretName = "agentic-trigger-token"
-	argocdNotificationsSecretName = "argocd-notifications-secret"
-	agenticTriggerTokenKey        = "agentic-trigger-token"
-)
-
-func (r *ReconcileGitopsService) ensureAgenticTriggerToken(namespace string, reqLogger logr.Logger) error {
-	// Step 1: Create a service-account-token Secret if it doesn't exist.
-	// Kubernetes will auto-populate the "token" field.
-	tokenSecret := &corev1.Secret{}
-	tokenSecretKey := types.NamespacedName{Name: agenticTriggerTokenSecretName, Namespace: namespace}
-	if err := r.Client.Get(context.TODO(), tokenSecretKey, tokenSecret); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("Creating agentic-trigger SA token Secret", "Namespace", namespace)
-			tokenSecret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      agenticTriggerTokenSecretName,
-					Namespace: namespace,
-					Annotations: map[string]string{
-						"kubernetes.io/service-account.name": agenticTriggerServiceName,
-					},
-				},
-				Type: corev1.SecretTypeServiceAccountToken,
-			}
-			if err := r.Client.Create(context.TODO(), tokenSecret); err != nil {
-				return err
-			}
-			// Token won't be populated yet on first create; will be picked up next reconcile
-			reqLogger.Info("SA token Secret created, token will be available on next reconcile")
-			return nil
-		}
-		return err
-	}
-
-	// Step 2: Read the auto-populated token from the Secret
-	token, ok := tokenSecret.Data["token"]
-	if !ok || len(token) == 0 {
-		reqLogger.Info("SA token not yet populated by Kubernetes, will retry on next reconcile")
-		return nil
-	}
-
-	// Step 3: Inject token into argocd-notifications-secret
-	notifSecret := &corev1.Secret{}
-	notifSecretKey := types.NamespacedName{Name: argocdNotificationsSecretName, Namespace: namespace}
-	if err := r.Client.Get(context.TODO(), notifSecretKey, notifSecret); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("argocd-notifications-secret not found, skipping token injection")
-			return nil
-		}
-		return err
-	}
-
-	existingToken, exists := notifSecret.Data[agenticTriggerTokenKey]
-	if exists && string(existingToken) == string(token) {
-		return nil
-	}
-
-	if notifSecret.Data == nil {
-		notifSecret.Data = make(map[string][]byte)
-	}
-	notifSecret.Data[agenticTriggerTokenKey] = token
-	reqLogger.Info("Injecting agentic-trigger token into argocd-notifications-secret")
-	return r.Client.Update(context.TODO(), notifSecret)
-}
-
-const (
-	argocdTLSCertsConfigMapName   = "argocd-tls-certs-cm"
-	serviceServingCABundleKey     = "service-ca.crt"
-	serviceServingCAAnnotation    = "service.beta.openshift.io/inject-cabundle"
-	agenticTriggerCAConfigMapName = "agentic-trigger-serving-ca"
-)
-
-func (r *ReconcileGitopsService) ensureAgenticTriggerTLSTrust(namespace string, reqLogger logr.Logger) error {
-	// Step 1: Ensure a ConfigMap exists with the inject-cabundle annotation.
-	// OpenShift auto-populates it with the service-serving CA bundle.
-	caBundleCM := &corev1.ConfigMap{}
-	caBundleCMKey := types.NamespacedName{Name: agenticTriggerCAConfigMapName, Namespace: namespace}
-	if err := r.Client.Get(context.TODO(), caBundleCMKey, caBundleCM); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("Creating ConfigMap for service-serving CA injection", "Namespace", namespace)
-			caBundleCM = &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      agenticTriggerCAConfigMapName,
-					Namespace: namespace,
-					Annotations: map[string]string{
-						serviceServingCAAnnotation: "true",
-					},
-				},
-			}
-			if err := r.Client.Create(context.TODO(), caBundleCM); err != nil {
-				return err
-			}
-			reqLogger.Info("CA bundle ConfigMap created, will be populated by OpenShift on next reconcile")
-			return nil
-		}
-		return err
-	}
-
-	// Step 2: Read the injected CA bundle
-	caBundle, ok := caBundleCM.Data[serviceServingCABundleKey]
-	if !ok || len(caBundle) == 0 {
-		reqLogger.Info("Service-serving CA not yet injected, will retry on next reconcile")
-		return nil
-	}
-
-	// Step 3: Inject into argocd-tls-certs-cm under the service hostname
-	tlsCertsCM := &corev1.ConfigMap{}
-	tlsCertsKey := types.NamespacedName{Name: argocdTLSCertsConfigMapName, Namespace: namespace}
-	if err := r.Client.Get(context.TODO(), tlsCertsKey, tlsCertsCM); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("argocd-tls-certs-cm not found, skipping TLS trust injection")
-			return nil
-		}
-		return err
-	}
-
-	hostname := fmt.Sprintf("%s.%s.svc", agenticTriggerServiceName, namespace)
-	if tlsCertsCM.Data != nil && tlsCertsCM.Data[hostname] == caBundle {
-		return nil
-	}
-
-	if tlsCertsCM.Data == nil {
-		tlsCertsCM.Data = make(map[string]string)
-	}
-	tlsCertsCM.Data[hostname] = caBundle
-	reqLogger.Info("Injecting service-serving CA into argocd-tls-certs-cm", "hostname", hostname)
-	return r.Client.Update(context.TODO(), tlsCertsCM)
-}
 
 func newAgenticTriggerServiceAccount(namespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      agenticTriggerServiceName,
+			Namespace: namespace,
+		},
+	}
+}
+
+func newAgenticTriggerNotificationsServiceAccount(namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agenticTriggerNotificationsSAName,
 			Namespace: namespace,
 		},
 	}
@@ -1556,12 +1211,12 @@ func newAgenticTriggerRole(namespace string) *rbacv1.Role {
 			{
 				APIGroups: []string{"agentic.openshift.io"},
 				Resources: []string{"agenticruns"},
-				Verbs:     []string{"create", "get", "list"},
+				Verbs:     []string{"create", "get", "list", "watch"},
 			},
 			{
 				APIGroups: []string{"agentic.openshift.io"},
-				Resources: []string{"agenticresults"},
-				Verbs:     []string{"get", "list"},
+				Resources: []string{"analysisresults"},
+				Verbs:     []string{"get"},
 			},
 		},
 	}
@@ -1623,7 +1278,8 @@ func newAgenticTriggerDeployment(namespace string, tlsEnabled bool) *appsv1.Depl
 				Name: "tls",
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: agenticTriggerServiceName + "-tls",
+						SecretName:  agenticTriggerServiceName + "-tls",
+						DefaultMode: func() *int32 { mode := int32(0644); return &mode }(),
 					},
 				},
 			},
@@ -1664,9 +1320,11 @@ func newAgenticTriggerDeployment(namespace string, tlsEnabled bool) *appsv1.Depl
 								},
 							},
 							Env: []corev1.EnvVar{
+								{Name: "ARGOCD_NAMESPACE", Value: namespace},
 								{Name: "AGENTIC_RUN_NAMESPACE", Value: envOrDefaultCtrl("AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")},
 								{Name: "AGENTIC_RUN_COOLDOWN", Value: envOrDefaultCtrl("AGENTIC_RUN_COOLDOWN", "10m")},
 								{Name: "AGENTIC_ANALYSIS_AGENT", Value: envOrDefaultCtrl("AGENTIC_ANALYSIS_AGENT", "default")},
+								{Name: "AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD", Value: envOrDefaultCtrl("AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD", "10m")},
 								{Name: agenticSkillsImageEnvName, Value: os.Getenv(agenticSkillsImageEnvName)},
 							},
 							VolumeMounts: volumeMounts,

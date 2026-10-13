@@ -1,10 +1,13 @@
 package main
 
 import (
+	"time"
+
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/workqueue"
 )
 
 var (
@@ -21,7 +24,7 @@ var (
 	agenticResultGVR = schema.GroupVersionResource{
 		Group:    "agentic.openshift.io",
 		Version:  "v1alpha1",
-		Resource: "agenticresults",
+		Resource: "analysisresults",
 	}
 )
 
@@ -29,26 +32,19 @@ type TriggerService struct {
 	kubeClient kubernetes.Interface
 	dynClient  dynamic.Interface
 	config     ServiceConfig
-	dedup      *DedupCache
 	logger     logr.Logger
+	now        func() time.Time
+	queue      workqueue.TypedRateLimitingInterface[string]
 }
 
 type DiagnoseRequest struct {
 	Application          string `json:"application"`
 	ApplicationNamespace string `json:"applicationNamespace"`
-	DestinationNamespace string `json:"destinationNamespace,omitempty"`
-	SyncStatus           string `json:"syncStatus"`
-	HealthStatus         string `json:"healthStatus"`
-	Revision             string `json:"revision,omitempty"`
 }
 
 type DiagnoseResponse struct {
 	Accepted bool   `json:"accepted"`
 	Reason   string `json:"reason,omitempty"`
-	Run      *struct {
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-	} `json:"run,omitempty"`
 }
 
 type DiagnosisResponse struct {

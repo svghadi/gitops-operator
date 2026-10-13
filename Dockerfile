@@ -16,6 +16,7 @@ COPY cmd/main.go cmd/main.go
 COPY api/ api/
 COPY controllers/ controllers/
 COPY common/ common/
+COPY internal/agentic/ internal/agentic/
 COPY version/ version/
 
 # Build - Use TARGETARCH to build for the correct architecture

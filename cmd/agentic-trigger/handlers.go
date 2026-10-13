@@ -9,34 +9,33 @@ import (
 	"strings"
 	"time"
 
+	"github.com/redhat-developer/gitops-operator/internal/agentic"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 func (s *TriggerService) HandleDiagnose(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := s.logger.WithName("diagnose")
 
-	// --- Auth ---
 	token := extractBearerToken(r.Header.Get("Authorization"))
 	if token == "" {
 		writeJSON(w, http.StatusUnauthorized, DiagnoseResponse{Accepted: false, Reason: "missing authorization"})
 		return
 	}
-	caller, err := authenticateCaller(ctx, s.kubeClient, token, logger)
-	if err != nil {
-		logger.Error(err, "token review failed")
-		writeJSON(w, http.StatusInternalServerError, DiagnoseResponse{Accepted: false, Reason: "authentication error"})
+	authResult := authenticateCaller(ctx, s.kubeClient, token, s.config.ArgocdNamespace, logger)
+	if authResult == nil {
+		writeJSON(w, http.StatusInternalServerError, DiagnoseResponse{Accepted: false, Reason: "authentication service unavailable"})
 		return
 	}
-	if caller == nil {
-		writeJSON(w, http.StatusForbidden, DiagnoseResponse{Accepted: false, Reason: "unauthenticated"})
+	if !authResult.Authenticated {
+		writeJSON(w, http.StatusUnauthorized, DiagnoseResponse{Accepted: false, Reason: "invalid or expired token"})
 		return
 	}
-
-	// --- Decode payload ---
+	if !authResult.Authorized {
+		writeJSON(w, http.StatusForbidden, DiagnoseResponse{Accepted: false, Reason: "caller not authorized"})
+		return
+	}
 	var req DiagnoseRequest
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -45,7 +44,6 @@ func (s *TriggerService) HandleDiagnose(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Use payload fields directly
 	name := req.Application
 	namespace := req.ApplicationNamespace
 	if name == "" || namespace == "" {
@@ -53,111 +51,17 @@ func (s *TriggerService) HandleDiagnose(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	logger = logger.WithValues("app", namespace+"/"+name)
 	logger.Info("diagnose request received",
-		"healthStatus", req.HealthStatus,
-		"syncStatus", req.SyncStatus,
-		"destinationNamespace", req.DestinationNamespace,
-		"revision", req.Revision,
-		"trigger", caller.TriggerType,
+		"app", namespace+"/"+name,
+		"trigger", triggerAutomatic,
 	)
 
-	// --- Policy check using payload ---
-	if caller.TriggerType == triggerAutomatic && !qualifiesForAutomatic(req.SyncStatus, req.HealthStatus) {
-		writeJSON(w, http.StatusOK, DiagnoseResponse{
-			Accepted: false,
-			Reason:   fmt.Sprintf("application %q does not qualify for automatic diagnosis", name),
-		})
+	if s.queue == nil || s.queue.ShuttingDown() {
+		writeJSON(w, http.StatusServiceUnavailable, DiagnoseResponse{Reason: "diagnosis queue unavailable"})
 		return
 	}
-
-	// --- Dedup using payload ---
-	syncStatus := req.SyncStatus
-	healthStatus := req.HealthStatus
-	revision := req.Revision
-
-	// --- Optional enrichment: fetch live Application for UID, conditions, resources ---
-	var appUID string
-	var conditions []AppCondition
-	var unhealthyResources []UnhealthyResource
-	app, err := s.getApplication(ctx, namespace, name)
-	if err != nil {
-		logger.V(1).Info("could not fetch live Application for enrichment, proceeding with payload only", "error", err)
-	} else {
-		appUID = string(app.GetUID())
-		// Use live status if available (source of truth)
-		if live, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status"); live != "" {
-			syncStatus = live
-		}
-		if live, _, _ := unstructured.NestedString(app.Object, "status", "health", "status"); live != "" {
-			healthStatus = live
-		}
-		if live, _, _ := unstructured.NestedString(app.Object, "status", "sync", "revision"); live != "" {
-			revision = live
-		}
-		conditions = extractConditions(app)
-		unhealthyResources = extractUnhealthyResources(app)
-	}
-
-	signature := buildSignature(appUID, syncStatus, healthStatus, revision)
-	dedupKey := buildDedupKey(appUID, signature)
-	if !s.dedup.TryRecord(dedupKey) {
-		writeJSON(w, http.StatusOK, DiagnoseResponse{
-			Accepted: false,
-			Reason:   "cooldown active for this application state",
-		})
-		return
-	}
-
-	// --- Build and create AgenticRun ---
-	runName := buildAgenticRunName(name)
-	targetNS := req.DestinationNamespace
-	if targetNS == "" {
-		if app != nil {
-			targetNS, _, _ = unstructured.NestedString(app.Object, "spec", "destination", "namespace")
-		}
-		if targetNS == "" {
-			targetNS = namespace
-		}
-	}
-
-	agenticRun := buildAgenticRunObject(runName, s.config.RunNamespace, AgenticRunParams{
-		AppName:            name,
-		AppNamespace:       namespace,
-		AppUID:             appUID,
-		SyncStatus:         syncStatus,
-		HealthStatus:       healthStatus,
-		Revision:           revision,
-		TargetNS:           targetNS,
-		TriggerType:        caller.TriggerType,
-		Agent:              s.config.AnalysisAgent,
-		SkillsImage:        s.config.SkillsImage,
-		Conditions:         conditions,
-		UnhealthyResources: unhealthyResources,
-	})
-
-	if err := s.createAgenticRun(ctx, agenticRun); err != nil {
-		logger.Error(err, "failed to create AgenticRun")
-		writeJSON(w, http.StatusInternalServerError, DiagnoseResponse{Accepted: false, Reason: "failed to create AgenticRun"})
-		return
-	}
-
-	if err := s.annotateApplication(ctx, namespace, name, runName); err != nil {
-		logger.Error(err, "failed to annotate application (non-fatal)")
-	}
-
-	logger.Info("created AgenticRun", "name", runName, "trigger", caller.TriggerType)
-
-	writeJSON(w, http.StatusCreated, DiagnoseResponse{
-		Accepted: true,
-		Run: &struct {
-			Name      string `json:"name"`
-			Namespace string `json:"namespace"`
-		}{
-			Name:      runName,
-			Namespace: s.config.RunNamespace,
-		},
-	})
+	s.enqueueApplication(namespace, name)
+	writeJSON(w, http.StatusAccepted, DiagnoseResponse{Accepted: true, Reason: "diagnosis queued"})
 }
 
 // HandleDiagnosis is the handler for the diagnosis endpoint.
@@ -174,8 +78,16 @@ func (s *TriggerService) HandleDiagnosis(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	caller, err := authenticateCaller(ctx, s.kubeClient, token, logger)
-	if err != nil || caller == nil {
+	authResult := authenticateCaller(ctx, s.kubeClient, token, s.config.ArgocdNamespace, logger)
+	if authResult == nil {
+		writeJSON(w, http.StatusInternalServerError, DiagnosisResponse{Status: "error"})
+		return
+	}
+	if !authResult.Authenticated {
+		writeJSON(w, http.StatusUnauthorized, DiagnosisResponse{Status: "error"})
+		return
+	}
+	if !authResult.Authorized {
 		writeJSON(w, http.StatusForbidden, DiagnosisResponse{Status: "error"})
 		return
 	}
@@ -189,7 +101,7 @@ func (s *TriggerService) HandleDiagnosis(w http.ResponseWriter, r *http.Request)
 	appUID := string(app.GetUID())
 	syncStatus, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
 	healthStatus, _, _ := unstructured.NestedString(app.Object, "status", "health", "status")
-	revision, _, _ := unstructured.NestedString(app.Object, "status", "sync", "revision")
+	revision := agentic.Revision(app)
 
 	// Build the application information
 	appInfo := &ApplicationInfo{
@@ -201,29 +113,15 @@ func (s *TriggerService) HandleDiagnosis(w http.ResponseWriter, r *http.Request)
 		Revision:     revision,
 	}
 
-	// Prefer direct lookup via annotation (fast, O(1))
 	var latestRun *unstructured.Unstructured
-	annotations := app.GetAnnotations()
-	if runName := annotations["gitops.openshift.io/agentic-run"]; runName != "" {
-		run, err := s.getAgenticRun(ctx, s.config.RunNamespace, runName)
-		if err == nil {
-			latestRun = run
-		} else {
-			logger.V(1).Info("annotated AgenticRun not found, falling back to label list", "runName", runName)
-		}
+	runs, err := s.listAgenticRuns(ctx, name, namespace, appUID)
+	if err != nil {
+		logger.Error(err, "failed to list AgenticRuns")
+		writeJSON(w, http.StatusInternalServerError, DiagnosisResponse{Status: "error"})
+		return
 	}
-
-	// Fallback: label selector list (handles annotation missing or stale)
-	if latestRun == nil {
-		runs, err := s.listAgenticRuns(ctx, name, namespace, appUID)
-		if err != nil {
-			logger.Error(err, "failed to list AgenticRuns")
-			writeJSON(w, http.StatusInternalServerError, DiagnosisResponse{Status: "error"})
-			return
-		}
-		if len(runs) > 0 {
-			latestRun = runs[0]
-		}
+	if len(runs) > 0 {
+		latestRun = runs[0]
 	}
 
 	if latestRun == nil {
@@ -242,31 +140,19 @@ func (s *TriggerService) getApplication(ctx context.Context, namespace, name str
 	return s.dynClient.Resource(applicationGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 }
 
-func (s *TriggerService) createAgenticRun(ctx context.Context, run *unstructured.Unstructured) error {
+func (s *TriggerService) createAgenticRun(ctx context.Context, run *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	ns := run.GetNamespace()
-	_, err := s.dynClient.Resource(agenticRunGVR).Namespace(ns).Create(ctx, run, metav1.CreateOptions{})
-	return err
+	return s.dynClient.Resource(agenticRunGVR).Namespace(ns).Create(ctx, run, metav1.CreateOptions{})
 }
 
 func (s *TriggerService) getAgenticRun(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error) {
 	return s.dynClient.Resource(agenticRunGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 }
 
-func (s *TriggerService) annotateApplication(ctx context.Context, namespace, name, runName string) error {
-	patch := fmt.Appendf(nil,
-		`{"metadata":{"annotations":{"gitops.openshift.io/agentic-run":%q,"gitops.openshift.io/agentic-runner":"agentic-trigger"}}}`,
-		runName,
-	)
-	_, err := s.dynClient.Resource(applicationGVR).Namespace(namespace).Patch(
-		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{},
-	)
-	return err
-}
-
 func (s *TriggerService) listAgenticRuns(ctx context.Context, appName, appNamespace, appUID string) ([]*unstructured.Unstructured, error) {
 	labelSelector := fmt.Sprintf(
-		"gitops.openshift.io/application-name=%s,gitops.openshift.io/application-namespace=%s,gitops.openshift.io/application-uid=%s",
-		appName, appNamespace, appUID,
+		"gitops.openshift.io/application-namespace=%s,gitops.openshift.io/application-uid=%s",
+		appNamespace, appUID,
 	)
 
 	result, err := s.dynClient.Resource(agenticRunGVR).Namespace(s.config.RunNamespace).List(ctx, metav1.ListOptions{
@@ -278,13 +164,20 @@ func (s *TriggerService) listAgenticRuns(ctx context.Context, appName, appNamesp
 
 	runs := make([]*unstructured.Unstructured, 0, len(result.Items))
 	for i := range result.Items {
-		runs = append(runs, &result.Items[i])
+		if result.Items[i].GetLabels()[agentic.ManagedBy] == agentic.Manager && runBelongsToApplication(&result.Items[i], appName, appNamespace, appUID) {
+			runs = append(runs, &result.Items[i])
+		}
 	}
 
 	sort.Slice(runs, func(i, j int) bool {
 		ti := runs[i].GetAnnotations()["gitops.openshift.io/triggered-at"]
 		tj := runs[j].GetAnnotations()["gitops.openshift.io/triggered-at"]
-		return ti > tj
+		first, firstErr := time.Parse(time.RFC3339Nano, ti)
+		second, secondErr := time.Parse(time.RFC3339Nano, tj)
+		if firstErr == nil && secondErr == nil && !first.Equal(second) {
+			return first.After(second)
+		}
+		return runs[i].GetCreationTimestamp().After(runs[j].GetCreationTimestamp().Time)
 	})
 
 	return runs, nil
@@ -292,17 +185,6 @@ func (s *TriggerService) listAgenticRuns(ctx context.Context, appName, appNamesp
 
 func (s *TriggerService) getAgenticResult(ctx context.Context, runName string) (*unstructured.Unstructured, error) {
 	return s.dynClient.Resource(agenticResultGVR).Namespace(s.config.RunNamespace).Get(ctx, runName, metav1.GetOptions{})
-}
-
-func qualifiesForAutomatic(syncStatus, healthStatus string) bool {
-	if syncStatus == "OutOfSync" {
-		return true
-	}
-	switch strings.ToLower(healthStatus) {
-	case "Degraded", "Unknown", "Missing":
-		return true
-	}
-	return false
 }
 
 type AgenticRunParams struct {
@@ -313,7 +195,6 @@ type AgenticRunParams struct {
 	HealthStatus       string
 	Revision           string
 	TargetNS           string
-	TriggerType        string
 	Agent              string
 	SkillsImage        string
 	Conditions         []AppCondition
@@ -321,9 +202,6 @@ type AgenticRunParams struct {
 }
 
 func buildAgenticRunObject(name, namespace string, p AgenticRunParams) *unstructured.Unstructured {
-	now := time.Now().UTC().Format(time.RFC3339)
-	signature := buildSignature(p.AppUID, p.SyncStatus, p.HealthStatus, p.Revision)
-
 	requestText := fmt.Sprintf(
 		"Diagnose the following Argo CD Application running on an OpenShift cluster.\n"+
 			"The Argo CD instance is installed and managed by the Red Hat OpenShift GitOps Operator.\n"+
@@ -367,25 +245,23 @@ func buildAgenticRunObject(name, namespace string, p AgenticRunParams) *unstruct
 	)
 
 	run := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "agentic.openshift.io/v1alpha1",
 			"kind":       "AgenticRun",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      name,
 				"namespace": namespace,
-				"labels": map[string]interface{}{
-					"gitops.openshift.io/application-name":      p.AppName,
+				"labels": map[string]any{
 					"gitops.openshift.io/application-namespace": p.AppNamespace,
 					"gitops.openshift.io/application-uid":       p.AppUID,
 					"gitops.openshift.io/managed-by":            "agentic-trigger",
 				},
-				"annotations": map[string]interface{}{
-					"gitops.openshift.io/trigger-type":          p.TriggerType,
+				"annotations": map[string]any{
+					agentic.AppName:                             p.AppName,
+					"gitops.openshift.io/trigger-type":          triggerAutomatic,
 					"gitops.openshift.io/trigger-sync-status":   p.SyncStatus,
 					"gitops.openshift.io/trigger-health-status": p.HealthStatus,
 					"gitops.openshift.io/trigger-revision":      p.Revision,
-					"gitops.openshift.io/trigger-signature":     signature,
-					"gitops.openshift.io/triggered-at":          now,
 				},
 			},
 			"spec": buildAgenticRunSpec(requestText, p),
@@ -395,13 +271,13 @@ func buildAgenticRunObject(name, namespace string, p AgenticRunParams) *unstruct
 	return run
 }
 
-func buildAgenticRunSpec(requestText string, p AgenticRunParams) map[string]interface{} {
-	spec := map[string]interface{}{
+func buildAgenticRunSpec(requestText string, p AgenticRunParams) map[string]any {
+	spec := map[string]any{
 		"request": requestText,
-		"analysis": map[string]interface{}{
+		"analysis": map[string]any{
 			"agent": p.Agent,
 		},
-		"targetNamespaces": []string{p.TargetNS, p.AppNamespace},
+		"targetNamespaces": []any{p.TargetNS, p.AppNamespace},
 	}
 	if tools := buildToolsSpec(p.SkillsImage); len(tools) > 0 {
 		spec["tools"] = tools
@@ -409,13 +285,13 @@ func buildAgenticRunSpec(requestText string, p AgenticRunParams) map[string]inte
 	return spec
 }
 
-func buildToolsSpec(skillsImage string) map[string]interface{} {
-	tools := map[string]interface{}{}
+func buildToolsSpec(skillsImage string) map[string]any {
+	tools := map[string]any{}
 	if skillsImage != "" {
-		tools["skills"] = []interface{}{
-			map[string]interface{}{
+		tools["skills"] = []any{
+			map[string]any{
 				"image": skillsImage,
-				"paths": []interface{}{
+				"paths": []any{
 					"/skills/argocd-diagnostics",
 					"/skills/argocd-remediation",
 				},
@@ -432,7 +308,7 @@ func extractConditions(app *unstructured.Unstructured) []AppCondition {
 	}
 	var conditions []AppCondition
 	for _, item := range raw {
-		m, ok := item.(map[string]interface{})
+		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -452,7 +328,7 @@ func extractUnhealthyResources(app *unstructured.Unstructured) []UnhealthyResour
 	}
 	var resources []UnhealthyResource
 	for _, item := range raw {
-		m, ok := item.(map[string]interface{})
+		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -474,12 +350,19 @@ func extractUnhealthyResources(app *unstructured.Unstructured) []UnhealthyResour
 	return resources
 }
 
-func stringFromMap(m map[string]interface{}, key string) string {
+func stringFromMap(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
 }
 
-// buildConditionsContext builds the context for the AgenticRun
+// Application names live in annotations because they may exceed label limits.
+func runBelongsToApplication(run *unstructured.Unstructured, appName, appNamespace, appUID string) bool {
+	labels := run.GetLabels()
+	return run.GetAnnotations()[agentic.AppName] == appName &&
+		labels[agentic.AppNamespace] == appNamespace &&
+		labels[agentic.AppUID] == appUID
+}
+
 func buildConditionsContext(p *AgenticRunParams) string {
 	var sb strings.Builder
 
@@ -506,51 +389,6 @@ func buildConditionsContext(p *AgenticRunParams) string {
 	return sb.String()
 }
 
-func buildAgenticRunName(appName string) string {
-	sanitized := sanitizeToDNSLabel(appName)
-	timestamp := time.Now().UTC().Format("20060102150405")
-	prefix := "gitops-app-diag-"
-	name := prefix + sanitized + "-" + timestamp
-	if len(name) <= validation.DNS1035LabelMaxLength {
-		return strings.Trim(name, "-")
-	}
-	maxAppLen := validation.DNS1035LabelMaxLength - len(prefix) - len(timestamp) - 1
-	if maxAppLen < 8 {
-		maxAppLen = 8
-	}
-	if len(sanitized) > maxAppLen {
-		sanitized = sanitized[:maxAppLen]
-	}
-	return strings.Trim(prefix+strings.Trim(sanitized, "-")+"-"+timestamp, "-")
-}
-
-func sanitizeToDNSLabel(input string) string {
-	value := strings.ToLower(strings.TrimSpace(input))
-	if value == "" {
-		return "application"
-	}
-
-	var out strings.Builder
-	lastWasDash := false
-	for _, c := range value {
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
-			out.WriteRune(c)
-			lastWasDash = false
-			continue
-		}
-		if !lastWasDash {
-			out.WriteRune('-')
-			lastWasDash = true
-		}
-	}
-
-	result := strings.Trim(out.String(), "-")
-	if result == "" {
-		return "application"
-	}
-	return result
-}
-
 func (s *TriggerService) buildDiagnosisFromRun(ctx context.Context, run *unstructured.Unstructured, appName, appNS, appUID, syncStatus, healthStatus, revision string) DiagnosisResponse {
 	annotations := run.GetAnnotations()
 	triggerType := annotations["gitops.openshift.io/trigger-type"]
@@ -558,7 +396,7 @@ func (s *TriggerService) buildDiagnosisFromRun(ctx context.Context, run *unstruc
 	triggerRevision := annotations["gitops.openshift.io/trigger-revision"]
 	triggerHealth := annotations["gitops.openshift.io/trigger-health-status"]
 
-	status := mapRunStatus(run)
+	status := diagnosisStateForRun(run)
 
 	stale := false
 	if triggerRevision != revision || triggerHealth != healthStatus {
@@ -584,70 +422,118 @@ func (s *TriggerService) buildDiagnosisFromRun(ctx context.Context, run *unstruc
 		Stale: stale,
 	}
 
-	if status == "completed" {
-		result, err := s.getAgenticResult(ctx, run.GetName())
+	if status == "failed" {
+		conditions, _, _ := unstructured.NestedSlice(run.Object, "status", "conditions")
+		for _, raw := range conditions {
+			c, _ := raw.(map[string]any)
+			if stringFromMap(c, "type") == "Analyzed" && stringFromMap(c, "status") == "False" {
+				resp.Summary = stringFromMap(c, "message")
+			}
+		}
+	}
+	if status == "completed" || status == "failed" {
+		refs, _, _ := unstructured.NestedSlice(run.Object, "status", "steps", "analysis", "results")
+		if len(refs) == 0 {
+			if status == "completed" {
+				resp.Status = "running"
+			}
+			return resp
+		}
+		ref, _ := refs[len(refs)-1].(map[string]any)
+		result, err := s.getAgenticResult(ctx, stringFromMap(ref, "name"))
 		if err != nil {
-			s.logger.V(1).Info("AgenticResult not found for run", "run", run.GetName(), "error", err)
+			if status == "completed" {
+				resp.Status = "running"
+			}
+			return resp
+		}
+		parent, _, _ := unstructured.NestedString(result.Object, "spec", "agenticRunName")
+		if parent != run.GetName() {
+			resp.Status = "running"
+			return resp
+		}
+		if status == "failed" {
+			if failure, _, _ := unstructured.NestedString(result.Object, "status", "failureReason"); failure != "" {
+				resp.Summary = failure
+			}
 		} else {
-			resp.Summary, _, _ = unstructured.NestedString(result.Object, "status", "summary")
-			resp.Run.CompletedAt, _, _ = unstructured.NestedString(result.Object, "status", "completedAt")
-			suggestions, found, _ := unstructured.NestedSlice(result.Object, "status", "suggestions")
-			if found {
-				for _, s := range suggestions {
-					item, ok := s.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					id, _, _ := unstructured.NestedString(item, "id")
-					severity, _, _ := unstructured.NestedString(item, "severity")
-					title, _, _ := unstructured.NestedString(item, "title")
-					desc, _, _ := unstructured.NestedString(item, "description")
-					remed, _, _ := unstructured.NestedString(item, "remediation")
-					resp.Suggestions = append(resp.Suggestions, DiagnosisSuggestion{
-						ID:          id,
-						Severity:    severity,
-						Title:       title,
-						Description: desc,
-						Remediation: remed,
-					})
+			resp.Summary, _, _ = unstructured.NestedString(result.Object, "status", "diagnosis", "summary")
+		}
+		conditions, _, _ := unstructured.NestedSlice(result.Object, "status", "conditions")
+		for _, raw := range conditions {
+			c, _ := raw.(map[string]any)
+			if stringFromMap(c, "type") == "Completed" && stringFromMap(c, "status") == "True" {
+				resp.Run.CompletedAt = stringFromMap(c, "lastTransitionTime")
+			}
+		}
+		options, _, _ := unstructured.NestedSlice(result.Object, "status", "options")
+		for i, raw := range options {
+			option, _ := raw.(map[string]any)
+			summary, _, _ := unstructured.NestedString(option, "diagnosis", "summary")
+			cause, _, _ := unstructured.NestedString(option, "diagnosis", "rootCause")
+			if i == 0 && resp.Summary == "" {
+				resp.Summary = summary
+			}
+			remediation, _, _ := unstructured.NestedString(option, "remediationPlan", "description")
+			actions, _, _ := unstructured.NestedSlice(option, "remediationPlan", "actions")
+			for _, raw := range actions {
+				action, _ := raw.(map[string]any)
+				remediation += "\n" + stringFromMap(action, "description")
+				if command := stringFromMap(action, "command"); command != "" {
+					remediation += "\n```sh\n" + command + "\n```"
 				}
 			}
+			resp.Suggestions = append(resp.Suggestions, DiagnosisSuggestion{ID: fmt.Sprintf("%s-%d", result.GetName(), i+1), Severity: "info", Title: stringFromMap(option, "title"), Description: strings.TrimSpace(cause + "\n" + summary), Remediation: strings.TrimSpace(remediation)})
 		}
 	}
 
 	return resp
 }
 
-func mapRunStatus(run *unstructured.Unstructured) string {
-	conditions, found, _ := unstructured.NestedSlice(run.Object, "status", "conditions")
-	if !found || len(conditions) == 0 {
-		return "running"
+// diagnosisStateForRun reports the trigger's diagnosis state, not the
+// AgenticRun's derived phase. Analysis completes this service's analysis-only
+// runs even though the upstream phase may be Proposed or NoActionRequired.
+func diagnosisStateForRun(run *unstructured.Unstructured) string {
+	conditions, _, _ := unstructured.NestedSlice(run.Object, "status", "conditions")
+	byType := map[string]map[string]any{}
+	for _, raw := range conditions {
+		c, _ := raw.(map[string]any)
+		byType[stringFromMap(c, "type")] = c
 	}
-
-	for _, c := range conditions {
-		cond, ok := c.(map[string]interface{})
-		if !ok {
+	// Terminal failures win even when earlier successful conditions remain.
+	for _, key := range []string{"EmergencyStopped", "Denied", "Escalated"} {
+		if stringFromMap(byType[key], "status") == "True" {
+			return "failed"
+		}
+	}
+	// Conditions accumulate. A completed diagnosis must beat an older
+	// execution condition, regardless of their order in the status slice.
+	for _, key := range []string{"Verified", "Analyzed"} {
+		if stringFromMap(byType[key], "status") == "True" {
+			return "completed"
+		}
+	}
+	for _, key := range []string{"Escalated", "Verified", "Executed", "Analyzed"} {
+		c, exists := byType[key]
+		if !exists {
 			continue
 		}
-		condType, _, _ := unstructured.NestedString(cond, "type")
-		condStatus, _, _ := unstructured.NestedString(cond, "status")
-		reason, _, _ := unstructured.NestedString(cond, "reason")
-
-		if condType == "Analyzed" {
-			switch {
-			case condStatus == "True":
-				return "completed"
-			case condStatus == "False" && reason == "Failed":
-				return "failed"
-			default:
+		switch stringFromMap(c, "status") {
+		case "True":
+			return "running" // Executed=True: later steps may still be active.
+		case "False":
+			if key == "Verified" && stringFromMap(c, "reason") == "RetryingExecution" {
 				return "running"
 			}
+			return "failed"
+		default:
+			return "running"
 		}
 	}
-	return "running"
+	return "running" // Unknown or absent conditions cannot justify another run.
 }
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
