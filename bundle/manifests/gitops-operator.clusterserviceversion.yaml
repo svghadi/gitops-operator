@@ -207,7 +207,7 @@ metadata:
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
     repository: https://github.com/redhat-developer/gitops-operator
     support: Red Hat
-  name: gitops-operator.v1.8.0
+  name: gitops-operator.v1.23.0
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -1095,8 +1095,8 @@ spec:
   maturity: alpha
   provider:
     name: Red Hat Inc
-  replaces: gitops-operator.v1.7.3
-  version: 1.8.0
+  replaces: gitops-operator.v1.22.2
+  version: 1.23.0
   webhookdefinitions:
   - admissionReviewVersions:
     - v1alpha1
