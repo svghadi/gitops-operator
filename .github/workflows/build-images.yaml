@@ -61,3 +61,60 @@ jobs:
           file: Dockerfile.agentic-trigger
           push: true
           tags: ghcr.io/svghadi/gitops-operator-agentic-trigger:latest
+
+  build-and-push-bundle:
+    name: Build and push bundle image
+    runs-on: ubuntu-latest
+    needs: [build-operator-manager, build-ai-controller]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push bundle image
+        run: |
+          docker build -f bundle.Dockerfile -t ghcr.io/svghadi/gitops-operator-bundle:latest .
+          docker push ghcr.io/svghadi/gitops-operator-bundle:latest
+
+  build-and-push-catalog:
+    name: Build and push catalog image
+    runs-on: ubuntu-latest
+    needs: [build-and-push-bundle]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install opm
+        run: |
+          OS=$(go env GOOS) && ARCH=$(go env GOARCH)
+          curl -sSLo /usr/local/bin/opm \
+            https://github.com/operator-framework/operator-registry/releases/download/v1.23.0/${OS}-${ARCH}-opm
+          chmod +x /usr/local/bin/opm
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push catalog image
+        run: |
+          opm index add \
+            --container-tool docker \
+            --mode semver \
+            --tag ghcr.io/svghadi/gitops-operator-catalog:latest \
+            --bundles ghcr.io/svghadi/gitops-operator-bundle:latest
+          docker push ghcr.io/svghadi/gitops-operator-catalog:latest

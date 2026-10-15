@@ -189,8 +189,8 @@ metadata:
       ]
     capabilities: Deep Insights
     console.openshift.io/plugins: '["gitops-plugin"]'
-    containerImage: ghcr.io/svghadi/gitops-operator:latest
-    createdAt: "2026-09-09T09:22:31Z"
+    containerImage: quay.io/redhat-developer/gitops-operator
+    createdAt: "2026-10-15T09:11:42Z"
     description: Enables teams to adopt GitOps principles for managing cluster configurations
       and application delivery across hybrid multi-cluster Kubernetes environments.
     features.operators.openshift.io/disconnected: "true"
@@ -622,12 +622,6 @@ spec:
           - update
           - watch
         - apiGroups:
-          - authentication.k8s.io
-          resources:
-          - tokenreviews
-          verbs:
-          - create
-        - apiGroups:
           - argoproj.io
           resources:
           - applications
@@ -985,6 +979,8 @@ spec:
                 - name: DISABLE_CLUSTER_TLS_PROFILE
                   value: "false"
                 - name: ENABLE_AGENTIC_GITOPS_INTEGRATION
+                  value: "true"
+                - name: AGENTIC_TRIGGER_TLS_ENABLED
                   value: "false"
                 - name: AGENTIC_RUN_NAMESPACE
                   value: openshift-lightspeed

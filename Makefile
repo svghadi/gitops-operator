@@ -3,7 +3,8 @@
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
 # - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
 # - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
-VERSION ?= ""
+VERSION ?= 1.23.0
+
 
 
 # Try to detect Docker or Podman (override with: make CONTAINER_RUNTIME=podman ...)
@@ -35,7 +36,7 @@ endif
 BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
 
 # IMAGE defines the base image to be used for operator, bundle and catalog.
-IMAGE ?= quay.io/redhat-developer/gitops-operator
+IMAGE ?= ghcr.io/svghadi/gitops-operator
 
 # IMAGE_TAG_BASE defines the docker.io namespace and part of the image name for remote images.
 # This variable is used to construct full image tags for bundle and catalog images.
@@ -46,7 +47,7 @@ IMAGE_TAG_BASE ?= $(IMAGE)
 
 # BUNDLE_IMG defines the image:tag used for the bundle.
 # You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
-BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-bundle:$(VERSION)
+BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-bundle:latest
 
 # BUNDLE_GEN_FLAGS are the flags passed to the operator-sdk generate bundle command
 BUNDLE_GEN_FLAGS ?= -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
@@ -60,10 +61,10 @@ ifeq ($(USE_IMAGE_DIGESTS), true)
 endif
 
 # Image URL to use all building/pushing image targets
-IMG ?= $(IMAGE):$(VERSION)
+IMG ?= $(IMAGE):latest
 
 # Agentic integration images (override for local builds, e.g. quay.io/<user>/...)
-AGENTIC_TRIGGER_IMG ?= quay.io/mangaal/agentic-trigger:latest
+AGENTIC_TRIGGER_IMG ?= ghcr.io/svghadi/gitops-operator-agentic-trigger:latest
 PLATFORM ?= linux/amd64
 
 # Set the Operator SDK version to use.
@@ -350,7 +351,7 @@ endif
 BUNDLE_IMGS ?= $(BUNDLE_IMG)
 
 # The image tag given to the resulting catalog image (e.g. make catalog-build CATALOG_IMG=example.com/operator-catalog:v0.2.0).
-CATALOG_IMG ?= $(IMAGE_TAG_BASE)-catalog:v$(VERSION)
+CATALOG_IMG ?= $(IMAGE_TAG_BASE)-catalog:latest
 
 # Set CATALOG_BASE_IMG to an existing catalog image tag to add $BUNDLE_IMGS to that image.
 ifneq ($(origin CATALOG_BASE_IMG), undefined)
