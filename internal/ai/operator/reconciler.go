@@ -1,4 +1,4 @@
-package controllers
+package operator
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -27,42 +28,38 @@ import (
 
 const serviceServingCAAnnotation = "service.beta.openshift.io/inject-cabundle"
 
-// agenticDependencyRequests enqueues a GitopsService reconcile when any of the
-// agentic-trigger supporting resources change (token Secret, CA ConfigMap).
-func (r *ReconcileGitopsService) agenticDependencyRequests(ctx context.Context, obj client.Object) []reconcile.Request {
-	ns, err := GetBackendNamespace(r.Client)
-	if err != nil || obj.GetNamespace() != ns {
+// DependencyRequests returns a handler that enqueues a GitopsService reconcile
+// when any agentic-trigger supporting resource changes. getBackendNS is passed
+// by the caller to avoid a circular import with the controllers package.
+func DependencyRequests(cl client.Client, getBackendNS func(client.Client) (string, error)) func(ctx context.Context, obj client.Object) []reconcile.Request {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		ns, err := getBackendNS(cl)
+		if err != nil || obj.GetNamespace() != ns {
+			return nil
+		}
+		switch obj.GetName() {
+		case notifications.TokenSecretName, notifications.CAConfigMap:
+			return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "cluster"}}}
+		}
 		return nil
 	}
-	switch obj.GetName() {
-	case notifications.TokenSecretName, notifications.CAConfigMap:
-		return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: serviceName}}}
-	}
-	return nil
 }
 
-// isAIEnabled returns true when the operator-level flag is set AND the managed
-// ArgoCD instance has .spec.ai.troubleshooting enabled.
-func (r *ReconcileGitopsService) isAIEnabled(ctx context.Context) bool {
-	if !r.EnableAIFeatures {
-		return false
-	}
-	argoCD := &argoapp.ArgoCD{}
-	if err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      common.ArgoCDInstanceName,
-		Namespace: serviceNamespace,
-	}, argoCD); err != nil {
-		return false
-	}
-	return argoCD.Spec.AI != nil && argoCD.Spec.AI.Troubleshooting
-}
-
-func (r *ReconcileGitopsService) reconcileAgenticTriggerService(key types.NamespacedName, instance *pipelinesv1alpha1.GitopsService, logger logr.Logger) (reconcile.Result, error) {
+// ReconcileAgenticTriggerService creates or updates all K8s resources for the
+// agentic-trigger integration and cleans them up when AI is disabled.
+func ReconcileAgenticTriggerService(
+	cl client.Client,
+	scheme *runtime.Scheme,
+	enableAIFeatures bool,
+	key types.NamespacedName,
+	instance *pipelinesv1alpha1.GitopsService,
+	logger logr.Logger,
+) (reconcile.Result, error) {
 	ctx := context.TODO()
 	ns := key.Namespace
-	runNS := envOrDefaultCtrl("AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")
-	if !r.isAIEnabled(ctx) {
-		return reconcile.Result{}, r.cleanupAgenticTrigger(ctx, ns, runNS, instance)
+	runNS := envOrDefault("AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")
+	if !isAIEnabled(cl, enableAIFeatures) {
+		return reconcile.Result{}, cleanupAgenticTrigger(ctx, cl, ns, runNS, instance)
 	}
 	grace, err := agentic.Duration(os.Getenv("AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD"), 10*time.Minute, true)
 	if err != nil {
@@ -72,8 +69,8 @@ func (r *ReconcileGitopsService) reconcileAgenticTriggerService(key types.Namesp
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("agentic cooldown: %w", err)
 	}
-	tlsEnabled := !strings.EqualFold(os.Getenv(agenticTriggerTLSEnv), "false")
-	deploy := newAgenticTriggerDeployment(ns, tlsEnabled)
+	tlsEnabled := !strings.EqualFold(os.Getenv(TLSEnv), "false")
+	deploy := NewDeployment(ns, tlsEnabled)
 	for i := range deploy.Spec.Template.Spec.Containers[0].Env {
 		e := &deploy.Spec.Template.Spec.Containers[0].Env[i]
 		switch e.Name {
@@ -84,15 +81,15 @@ func (r *ReconcileGitopsService) reconcileAgenticTriggerService(key types.Namesp
 		}
 	}
 	objects := []client.Object{
-		newAgenticTriggerServiceAccount(ns), newAgenticTriggerNotificationsServiceAccount(ns),
-		newAgenticTriggerClusterRole(), newAgenticTriggerClusterRoleBinding(ns),
-		newAgenticTriggerRole(runNS), newAgenticTriggerRoleBinding(runNS, ns),
-		deploy, newAgenticTriggerService(ns, tlsEnabled),
+		NewServiceAccount(ns), NewNotificationsServiceAccount(ns),
+		NewClusterRole(), NewClusterRoleBinding(ns),
+		NewRole(runNS), NewRoleBinding(runNS, ns),
+		deploy, NewService(ns, tlsEnabled),
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        notifications.TokenSecretName,
 				Namespace:   ns,
-				Annotations: map[string]string{"kubernetes.io/service-account.name": agenticTriggerNotificationsSAName},
+				Annotations: map[string]string{"kubernetes.io/service-account.name": NotificationsSAName},
 			},
 			Type: corev1.SecretTypeServiceAccountToken,
 		},
@@ -107,18 +104,32 @@ func (r *ReconcileGitopsService) reconcileAgenticTriggerService(key types.Namesp
 		})
 	}
 	for _, obj := range objects {
-		if err := r.reconcileAgenticObject(ctx, instance, obj); err != nil {
+		if err := reconcileAgenticObject(ctx, cl, scheme, instance, obj); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
 	return reconcile.Result{}, nil
 }
 
-// Only overwrite fields owned by this integration, preserving API defaults,
-// allocated Service addresses and asynchronously populated token/CA data.
-func (r *ReconcileGitopsService) reconcileAgenticObject(ctx context.Context, owner *pipelinesv1alpha1.GitopsService, desired client.Object) error {
+func isAIEnabled(cl client.Client, enableAIFeatures bool) bool {
+	if !enableAIFeatures {
+		return false
+	}
+	argoCD := &argoapp.ArgoCD{}
+	if err := cl.Get(context.TODO(), types.NamespacedName{
+		Name:      common.ArgoCDInstanceName,
+		Namespace: "openshift-gitops",
+	}, argoCD); err != nil {
+		return false
+	}
+	return argoCD.Spec.AI != nil && argoCD.Spec.AI.Troubleshooting
+}
+
+// reconcileAgenticObject creates or patches a single owned resource, preserving
+// API-allocated fields (ClusterIP, NodePort, token/CA data).
+func reconcileAgenticObject(ctx context.Context, cl client.Client, scheme *runtime.Scheme, owner *pipelinesv1alpha1.GitopsService, desired client.Object) error {
 	current := desired.DeepCopyObject().(client.Object)
-	err := r.Client.Get(ctx, client.ObjectKeyFromObject(desired), current)
+	err := cl.Get(ctx, client.ObjectKeyFromObject(desired), current)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
@@ -129,10 +140,10 @@ func (r *ReconcileGitopsService) reconcileAgenticObject(ctx context.Context, own
 		}
 		labels[agentic.ManagedBy] = agentic.Manager
 		desired.SetLabels(labels)
-		if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
+		if err := controllerutil.SetControllerReference(owner, desired, scheme); err != nil {
 			return err
 		}
-		return r.Client.Create(ctx, desired)
+		return cl.Create(ctx, desired)
 	}
 	if !metav1.IsControlledBy(current, owner) {
 		return fmt.Errorf("refusing to update agentic resource %s not owned by GitopsService %s", client.ObjectKeyFromObject(current), owner.Name)
@@ -168,7 +179,6 @@ func (r *ReconcileGitopsService) reconcileAgenticObject(ctx context.Context, own
 	case *corev1.Service:
 		d := desired.(*corev1.Service)
 		obj.Spec.Selector = d.Spec.Selector
-		// NodePort is also API-allocated if the Service type was customized.
 		if len(obj.Spec.Ports) == 1 && len(d.Spec.Ports) == 1 {
 			d.Spec.Ports[0].NodePort = obj.Spec.Ports[0].NodePort
 		}
@@ -188,13 +198,12 @@ func (r *ReconcileGitopsService) reconcileAgenticObject(ctx context.Context, own
 	if reflect.DeepEqual(before, current) {
 		return nil
 	}
-	return r.Client.Patch(ctx, current, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+	return cl.Patch(ctx, current, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
 }
 
-func (r *ReconcileGitopsService) cleanupAgenticTrigger(ctx context.Context, ns, runNS string, owner *pipelinesv1alpha1.GitopsService) error {
-	// Scale down first to stop accepting new work.
+func cleanupAgenticTrigger(ctx context.Context, cl client.Client, ns, runNS string, owner *pipelinesv1alpha1.GitopsService) error {
 	deploy := &appsv1.Deployment{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: agenticTriggerServiceName, Namespace: ns}, deploy); err == nil {
+	if err := cl.Get(ctx, types.NamespacedName{Name: ServiceName, Namespace: ns}, deploy); err == nil {
 		if !metav1.IsControlledBy(deploy, owner) {
 			return fmt.Errorf("refusing to remove agentic Deployment not owned by GitopsService %s", owner.Name)
 		}
@@ -202,7 +211,7 @@ func (r *ReconcileGitopsService) cleanupAgenticTrigger(ctx context.Context, ns, 
 		zero := int32(0)
 		deploy.Spec.Replicas = &zero
 		if !reflect.DeepEqual(before.Spec.Replicas, deploy.Spec.Replicas) {
-			if err := r.Client.Patch(ctx, deploy, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			if err := cl.Patch(ctx, deploy, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 				return err
 			}
 		}
@@ -210,20 +219,17 @@ func (r *ReconcileGitopsService) cleanupAgenticTrigger(ctx context.Context, ns, 
 		return err
 	}
 
-	// Delete all owned K8s resources. The argocd-operator's reconcileAINotifications
-	// is responsible for cleaning up the NotificationsConfiguration entries, token,
-	// and TLS CA when .spec.ai.troubleshooting becomes false.
 	objects := []client.Object{
-		newAgenticTriggerDeployment(ns, true), newAgenticTriggerService(ns, true),
-		newAgenticTriggerRoleBinding(runNS, ns), newAgenticTriggerRole(runNS),
-		newAgenticTriggerClusterRoleBinding(ns), newAgenticTriggerClusterRole(),
-		newAgenticTriggerServiceAccount(ns), newAgenticTriggerNotificationsServiceAccount(ns),
+		NewDeployment(ns, true), NewService(ns, true),
+		NewRoleBinding(runNS, ns), NewRole(runNS),
+		NewClusterRoleBinding(ns), NewClusterRole(),
+		NewServiceAccount(ns), NewNotificationsServiceAccount(ns),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: notifications.TokenSecretName, Namespace: ns}},
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: agenticTriggerServiceName + "-tls", Namespace: ns}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: ServiceName + "-tls", Namespace: ns}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: notifications.CAConfigMap, Namespace: ns}},
 	}
 	for _, obj := range objects {
-		if err := r.Client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		if err := cl.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}

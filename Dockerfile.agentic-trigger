@@ -5,6 +5,7 @@ COPY argocd-operator/ argocd-operator/
 RUN go mod download
 COPY cmd/agentic-trigger/ cmd/agentic-trigger/
 COPY internal/agentic/ internal/agentic/
+COPY internal/ai/trigger/ internal/ai/trigger/
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o agentic-trigger ./cmd/agentic-trigger/
 

@@ -56,6 +56,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	configv1 "github.com/openshift/api/config/v1"
+
+	aioperator "github.com/redhat-developer/gitops-operator/internal/ai/operator"
 )
 
 var logs = logf.Log.WithName("controller_gitopsservice")
@@ -123,9 +125,10 @@ func (r *ReconcileGitopsService) SetupWithManager(mgr ctrl.Manager) error {
 		bldr = bldr.Owns(&routev1.Route{}, builder.WithPredicates(pred))
 	}
 
+	agenticDeps := aioperator.DependencyRequests(mgr.GetClient(), GetBackendNamespace)
 	bldr = bldr.
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests)).
-		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests))
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(agenticDeps)).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(agenticDeps))
 
 	return bldr.
 		Watches(
@@ -320,7 +323,7 @@ func (r *ReconcileGitopsService) Reconcile(ctx context.Context, request reconcil
 		return result, err
 	}
 
-	agenticResult, err := r.reconcileAgenticTriggerService(gitopsserviceNamespacedName, instance, reqLogger)
+	agenticResult, err := aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, gitopsserviceNamespacedName, instance, reqLogger)
 	if err != nil {
 		return agenticResult, err
 	}

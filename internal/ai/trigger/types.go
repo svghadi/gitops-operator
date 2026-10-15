@@ -1,4 +1,4 @@
-package main
+package trigger
 
 import (
 	"time"
@@ -28,6 +28,18 @@ var (
 	}
 )
 
+// ServiceConfig holds runtime configuration for the TriggerService.
+type ServiceConfig struct {
+	RunNamespace             string
+	AnalysisAgent            string
+	Cooldown                 time.Duration
+	SkillsImage              string
+	ArgocdNamespace          string
+	AutoDiagnosisGracePeriod time.Duration
+}
+
+// TriggerService is the main HTTP service that receives ArgoCD notification
+// webhooks and drives AgenticRun creation.
 type TriggerService struct {
 	kubeClient kubernetes.Interface
 	dynClient  dynamic.Interface
