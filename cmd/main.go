@@ -328,9 +328,17 @@ func main() {
 			DisableDefaultInstall: strings.ToLower(os.Getenv(common.DisableDefaultInstallEnvVar)) == "true",
 			CentralTLSProfile:     profile,
 			PluginNamespace:       pluginNamespace,
-			EnableAIFeatures:      enableAIFeatures,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "GitopsService")
+			os.Exit(1)
+		}
+
+		if err = (&controllers.AgenticTriggerReconciler{
+			Client:           client,
+			Scheme:           mgr.GetScheme(),
+			EnableAIFeatures: enableAIFeatures,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "AgenticTrigger")
 			os.Exit(1)
 		}
 	} else {

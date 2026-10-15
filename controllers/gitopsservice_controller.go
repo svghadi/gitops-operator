@@ -57,7 +57,6 @@ import (
 
 	configv1 "github.com/openshift/api/config/v1"
 
-	aioperator "github.com/redhat-developer/gitops-operator/internal/ai/operator"
 )
 
 var logs = logf.Log.WithName("controller_gitopsservice")
@@ -125,11 +124,6 @@ func (r *ReconcileGitopsService) SetupWithManager(mgr ctrl.Manager) error {
 		bldr = bldr.Owns(&routev1.Route{}, builder.WithPredicates(pred))
 	}
 
-	agenticDeps := aioperator.DependencyRequests(mgr.GetClient(), GetBackendNamespace)
-	bldr = bldr.
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(agenticDeps)).
-		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(agenticDeps))
-
 	return bldr.
 		Watches(
 			&corev1.Namespace{},
@@ -164,10 +158,6 @@ type ReconcileGitopsService struct {
 	// This is typically the operator's own namespace (e.g. "openshift-gitops-operator").
 	PluginNamespace string
 
-	// EnableAIFeatures enables AI-assisted GitOps features such as automated application diagnosis.
-	// Set via --enable-ai-features flag or ENABLE_AI_FEATURES env var.
-	// Per-ArgoCD opt-in is controlled by .spec.ai.troubleshooting on the ArgoCD CR.
-	EnableAIFeatures bool
 }
 
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
@@ -322,16 +312,6 @@ func (r *ReconcileGitopsService) Reconcile(ctx context.Context, request reconcil
 	if result, err := r.reconcileBackend(gitopsserviceNamespacedName, instance, reqLogger); err != nil {
 		return result, err
 	}
-
-	agenticResult, err := aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, gitopsserviceNamespacedName, instance, reqLogger)
-	if err != nil {
-		return agenticResult, err
-	}
-	defer func() {
-		if reconcileErr == nil && agenticResult.RequeueAfter > 0 && (result.RequeueAfter == 0 || agenticResult.RequeueAfter < result.RequeueAfter) {
-			result.RequeueAfter = agenticResult.RequeueAfter
-		}
-	}()
 
 	if r.PluginNamespace != namespace {
 		pluginNS := &corev1.Namespace{}
