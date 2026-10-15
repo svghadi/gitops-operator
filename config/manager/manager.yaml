@@ -55,7 +55,10 @@ spec:
           value: default
         - name: AGENTIC_TRIGGER_IMAGE
           value: ghcr.io/svghadi/gitops-operator-agentic-trigger:latest
+        - name: IMAGE_PULL_POLICY
+          value: Always
         image: controller:latest
+        imagePullPolicy: Always
         livenessProbe:
           httpGet:
             path: /healthz

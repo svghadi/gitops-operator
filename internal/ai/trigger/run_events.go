@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/redhat-developer/gitops-operator/internal/agentic"
@@ -59,9 +60,59 @@ func (s *TriggerService) enqueueRunOwner(ctx context.Context, obj any) {
 	}
 }
 
+// waitForCRD blocks until the agenticRunGVR CRD is available in the cluster,
+// logging once and then polling with exponential backoff. Returns false if ctx
+// is cancelled before the CRD appears.
+func (s *TriggerService) waitForCRD(ctx context.Context) bool {
+	s.logger.Info("Waiting for CRD to become available", "resource", agenticRunGVR.Resource, "group", agenticRunGVR.Group)
+	backoff := 5 * time.Second
+	for {
+		_, err := s.dynClient.Resource(agenticRunGVR).Namespace(s.config.RunNamespace).List(ctx, metav1.ListOptions{Limit: 1})
+		if err == nil {
+			return true
+		}
+		if apierrors.IsNotFound(err) || isNoResourceError(err) {
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return false
+			case <-timer.C:
+			}
+			if backoff < 5*time.Minute {
+				backoff *= 2
+			}
+			continue
+		}
+		// unexpected error — log and keep retrying
+		s.logger.Error(err, "Unexpected error waiting for CRD", "resource", agenticRunGVR.Resource)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+}
+
+// isNoResourceError returns true for the "server could not find the requested resource"
+// error that the dynamic client returns when a CRD is not installed.
+func isNoResourceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return apierrors.ReasonForError(err) == metav1.StatusReasonNotFound ||
+		strings.Contains(err.Error(), "could not find the requested resource")
+}
+
 // The initial informer list is needed after restart: it replays existing run
 // events so persisted RetryAt deadlines can be scheduled again. Resync is zero.
 func (s *TriggerService) runAgenticRunEvents(ctx context.Context) {
+	if !s.waitForCRD(ctx) {
+		return
+	}
+	s.logger.Info("CRD available, starting AgenticRun watcher", "resource", agenticRunGVR.Resource)
 	selector := agentic.ManagedBy + "=" + agentic.Manager
 	lw := &cache.ListWatch{
 		ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
