@@ -30,13 +30,13 @@ const (
 	// InfraNodeLabelSelector is a nodeSelector for infrastructure nodes in Openshift
 	InfraNodeLabelSelector = "node-role.kubernetes.io/infra"
 	// Default console plugin image
-	DefaultConsoleImage = "quay.io/redhat-user-workloads/rh-openshift-gitops-tenant/console-plugin-rhel9"
+	DefaultConsoleImage = "ghcr.io/svghadi/gitops-console-plugin"
 	// DefaultConsoleImagePF5 is Default console plugin image for PatternFly 5
-	DefaultConsoleImagePF5 = "quay.io/redhat-user-workloads/rh-openshift-gitops-tenant/console-plugin-4-18-rhel9"
+	DefaultConsoleImagePF5 = "ghcr.io/svghadi/gitops-console-plugin"
 	// Default console plugin version
-	DefaultConsoleVersion = "main"
+	DefaultConsoleVersion = "latest"
 	// DefaultConsoleVersionPF5 is a Default console plugin version for PatternFly 5
-	DefaultConsoleVersionPF5 = "main"
+	DefaultConsoleVersionPF5 = "latest"
 	// DefaultDynamicPluginStartOCPVersion is the minimum OCP version that supports the console plugin
 	DefaultDynamicPluginStartOCPVersion = "4.18.0"
 	// PluginPF6MinOCPVersion is the minimum OCP version that should use the PF6-based plugin;
