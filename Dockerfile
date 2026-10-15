@@ -17,6 +17,7 @@ COPY api/ api/
 COPY controllers/ controllers/
 COPY common/ common/
 COPY internal/agentic/ internal/agentic/
+COPY internal/ai/ internal/ai/
 COPY version/ version/
 
 # Build - Use TARGETARCH to build for the correct architecture
