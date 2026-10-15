@@ -189,7 +189,7 @@ metadata:
       ]
     capabilities: Deep Insights
     console.openshift.io/plugins: '["gitops-plugin"]'
-    containerImage: quay.io/redhat-developer/gitops-operator
+    containerImage: ghcr.io/svghadi/gitops-operator:latest
     createdAt: "2026-09-09T09:22:31Z"
     description: Enables teams to adopt GitOps principles for managing cluster configurations
       and application delivery across hybrid multi-cluster Kubernetes environments.
@@ -993,10 +993,10 @@ spec:
                 - name: AGENTIC_ANALYSIS_AGENT
                   value: default
                 - name: AGENTIC_TRIGGER_IMAGE
-                  value: quay.io/redhat-developer/gitops-operator-agentic-trigger:latest
+                  value: ghcr.io/svghadi/gitops-operator-agentic-trigger:latest
                 - name: ENABLE_CONVERSION_WEBHOOK
                   value: "true"
-                image: quay.io/redhat-developer/gitops-operator:latest
+                image: ghcr.io/svghadi/gitops-operator:latest
                 livenessProbe:
                   httpGet:
                     path: /healthz

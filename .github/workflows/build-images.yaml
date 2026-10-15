@@ -1,0 +1,51 @@
+name: Build and push images
+
+on:
+  push:
+    branches:
+      - feat/agenticrun-gitops-integration-mvp
+
+jobs:
+  build-operator-manager:
+    name: Build operator manager image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push operator manager image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ghcr.io/svghadi/gitops-operator:latest
+
+  build-ai-controller:
+    name: Build AI controller image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push AI controller image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.agentic-trigger
+          push: true
+          tags: ghcr.io/svghadi/gitops-operator-agentic-trigger:latest

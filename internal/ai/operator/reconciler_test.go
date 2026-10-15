@@ -47,7 +47,7 @@ func agenticOperatorFixture(t *testing.T) (client.Client, *runtime.Scheme, *pipe
 
 func doReconcile(t *testing.T, cl client.Client, scheme *runtime.Scheme, owner *pipelinesv1alpha1.GitopsService, enableAI bool, ns string) {
 	t.Helper()
-	if _, err := ReconcileAgenticTriggerService(cl, scheme, enableAI, types.NamespacedName{Namespace: ns}, owner, logr.Discard()); err != nil {
+	if _, err := ReconcileAgenticTriggerService(cl, scheme, enableAI, ns, types.NamespacedName{Namespace: ns}, owner, logr.Discard()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -147,7 +147,7 @@ func TestAgenticUnownedDeploymentIsPreserved(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := deployment.DeepCopy()
-			if _, err := ReconcileAgenticTriggerService(cl, scheme, enabled, types.NamespacedName{Namespace: "gitops"}, owner, logr.Discard()); err == nil {
+			if _, err := ReconcileAgenticTriggerService(cl, scheme, enabled, "gitops", types.NamespacedName{Namespace: "gitops"}, owner, logr.Discard()); err == nil {
 				t.Fatal("accepted deployment without integration ownership")
 			}
 			if err := cl.Get(ctx, client.ObjectKeyFromObject(deployment), deployment); err != nil {

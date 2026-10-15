@@ -51,12 +51,13 @@ func ReconcileAgenticTriggerService(
 	cl client.Client,
 	scheme *runtime.Scheme,
 	enableAIFeatures bool,
+	operatorNamespace string,
 	key types.NamespacedName,
 	instance *pipelinesv1alpha1.GitopsService,
 	logger logr.Logger,
 ) (reconcile.Result, error) {
 	ctx := context.TODO()
-	ns := key.Namespace
+	ns := operatorNamespace
 	runNS := envOrDefault("AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")
 	if !isAIEnabled(cl, enableAIFeatures) {
 		return reconcile.Result{}, cleanupAgenticTrigger(ctx, cl, ns, runNS, instance)

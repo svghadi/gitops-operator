@@ -334,9 +334,10 @@ func main() {
 		}
 
 		if err = (&controllers.AgenticTriggerReconciler{
-			Client:           client,
-			Scheme:           mgr.GetScheme(),
-			EnableAIFeatures: enableAIFeatures,
+			Client:            client,
+			Scheme:            mgr.GetScheme(),
+			EnableAIFeatures:  enableAIFeatures,
+			OperatorNamespace: pluginNamespace,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "AgenticTrigger")
 			os.Exit(1)

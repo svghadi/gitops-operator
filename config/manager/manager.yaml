@@ -52,7 +52,7 @@ spec:
         - name: AGENTIC_ANALYSIS_AGENT
           value: default
         - name: AGENTIC_TRIGGER_IMAGE
-          value: quay.io/mangaal/agentic-trigger:skill-test
+          value: ghcr.io/svghadi/gitops-operator-agentic-trigger:latest
         image: controller:latest
         livenessProbe:
           httpGet:

@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	ServiceName         = "agentic-trigger"
-	NotificationsSAName = "agentic-trigger-notifications"
+	ServiceName         = "ai-controller"
+	NotificationsSAName = "ai-controller-notifications"
 	ImageEnvName        = "AGENTIC_TRIGGER_IMAGE"
-	DefaultImage        = "quay.io/redhat-developer/gitops-operator-agentic-trigger:latest"
+	DefaultImage        = "ghcr.io/svghadi/gitops-operator-agentic-trigger:latest"
 	SkillsImageEnvName  = "AGENTIC_SKILLS_IMAGE"
 	TLSEnv              = "AGENTIC_TRIGGER_TLS_ENABLED"
 )

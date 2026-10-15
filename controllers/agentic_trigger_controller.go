@@ -21,9 +21,10 @@ var _ reconcile.Reconciler = &AgenticTriggerReconciler{}
 // Deployment and its supporting resources (RBAC, Service, token Secret, CA
 // ConfigMap) in the openshift-gitops namespace.
 type AgenticTriggerReconciler struct {
-	Client           client.Client
-	Scheme           *runtime.Scheme
-	EnableAIFeatures bool
+	Client            client.Client
+	Scheme            *runtime.Scheme
+	EnableAIFeatures  bool
+	OperatorNamespace string
 }
 
 // SetupWithManager registers the controller. It watches GitopsService as its
@@ -48,5 +49,5 @@ func (r *AgenticTriggerReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 
-	return aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, req.NamespacedName, instance, log)
+	return aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, r.OperatorNamespace, req.NamespacedName, instance, log)
 }
