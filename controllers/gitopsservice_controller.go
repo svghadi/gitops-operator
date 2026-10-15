@@ -24,7 +24,6 @@ import (
 	"reflect"
 	"strings"
 
-	argov1alpha1 "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1alpha1"
 	argoapp "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	argocommon "github.com/argoproj-labs/gitops-operator/argocd-operator/common"
 	argocdcontroller "github.com/argoproj-labs/gitops-operator/argocd-operator/controllers/argocd"
@@ -90,8 +89,7 @@ func (r *ReconcileGitopsService) SetupWithManager(mgr ctrl.Manager) error {
 	pred := predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			// Ignore updates to CR status in which case metadata.Generation does not change
-			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() ||
-				agenticAnnotationsChanged(e.ObjectOld, e.ObjectNew)
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
 		},
 		DeleteFunc: func(e event.DeleteEvent) bool {
 			// Evaluates to false if the object has been confirmed deleted.
@@ -127,8 +125,7 @@ func (r *ReconcileGitopsService) SetupWithManager(mgr ctrl.Manager) error {
 
 	bldr = bldr.
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests)).
-		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests)).
-		Watches(&argov1alpha1.NotificationsConfiguration{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests))
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.agenticDependencyRequests))
 
 	return bldr.
 		Watches(
@@ -163,6 +160,11 @@ type ReconcileGitopsService struct {
 	// PluginNamespace is the namespace where console plugin resources (Deployment, Service, ConfigMap) are deployed.
 	// This is typically the operator's own namespace (e.g. "openshift-gitops-operator").
 	PluginNamespace string
+
+	// EnableAIFeatures enables AI-assisted GitOps features such as automated application diagnosis.
+	// Set via --enable-ai-features flag or ENABLE_AI_FEATURES env var.
+	// Per-ArgoCD opt-in is controlled by .spec.ai.troubleshooting on the ArgoCD CR.
+	EnableAIFeatures bool
 }
 
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
@@ -1139,7 +1141,6 @@ const (
 	agenticTriggerImageEnvName        = "AGENTIC_TRIGGER_IMAGE"
 	agenticTriggerDefaultImage        = "quay.io/redhat-developer/gitops-operator-agentic-trigger:latest"
 	agenticSkillsImageEnvName         = "AGENTIC_SKILLS_IMAGE"
-	agenticIntegrationEnabledEnv      = "ENABLE_AGENTIC_GITOPS_INTEGRATION"
 	agenticTriggerTLSEnv              = "AGENTIC_TRIGGER_TLS_ENABLED"
 )
 

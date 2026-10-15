@@ -654,11 +654,14 @@ func (r *ReconcileArgoCD) reconcileResources(cr *argoproj.ArgoCD, argocdStatus *
 		return err
 	}
 
-	if !reflect.DeepEqual(cr.Spec.Notifications, argoproj.ArgoCDNotifications{}) || len(r.ManagedNotificationsSourceNamespaces) > 0 {
+	if !reflect.DeepEqual(cr.Spec.Notifications, argoproj.ArgoCDNotifications{}) || len(r.ManagedNotificationsSourceNamespaces) > 0 || AINotificationsEnabled(cr) {
 		log.Info("reconciling Notifications controller")
 		if err := r.reconcileNotificationsController(cr); err != nil {
 			return err
 		}
+	} else if err := r.cleanupAINotifications(cr); err != nil {
+		// Notifications controller is not running, but clean up any stale AI entries.
+		return err
 	}
 
 	if IsImageUpdaterAPIAvailable() {

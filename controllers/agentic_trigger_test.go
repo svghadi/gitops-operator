@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
-	argov1alpha1 "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1alpha1"
-	"github.com/argoproj/notifications-engine/pkg/triggers"
+	argoapp "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	"github.com/go-logr/logr"
 	pipelinesv1alpha1 "github.com/redhat-developer/gitops-operator/api/v1alpha1"
-	"github.com/redhat-developer/gitops-operator/internal/agentic"
+	"github.com/redhat-developer/gitops-operator/common"
+	"github.com/redhat-developer/gitops-operator/internal/ai/notifications"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -21,92 +20,74 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/yaml"
 )
 
 func agenticControllerFixture(t *testing.T) (*ReconcileGitopsService, *pipelinesv1alpha1.GitopsService) {
 	t.Helper()
-	t.Setenv(agenticIntegrationEnabledEnv, "false")
 	t.Setenv(agenticTriggerTLSEnv, "true")
 	t.Setenv("AGENTIC_RUN_NAMESPACE", "lightspeed")
 	t.Setenv("AGENTIC_RUN_COOLDOWN", "10m")
 	t.Setenv("AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD", "90s")
 	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, appsv1.AddToScheme, rbacv1.AddToScheme, pipelinesv1alpha1.AddToScheme, argov1alpha1.AddToScheme} {
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, appsv1.AddToScheme, rbacv1.AddToScheme, pipelinesv1alpha1.AddToScheme, argoapp.AddToScheme} {
 		if err := add(scheme); err != nil {
 			t.Fatal(err)
 		}
 	}
-	owner := &pipelinesv1alpha1.GitopsService{ObjectMeta: metav1.ObjectMeta{Name: "cluster", UID: "owner", Annotations: map[string]string{agentic.EnabledAnnotation: "true"}}}
-	nc := &argov1alpha1.NotificationsConfiguration{ObjectMeta: metav1.ObjectMeta{Name: defaultNotificationsConfigurationName, Namespace: "gitops"}}
-	nc.Spec.Subscriptions = map[string]string{"subscriptions": "- recipients: [slack:ops]\n  triggers: [on-sync-failed]\n  selector: team=platform\n"}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(owner, nc, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: argocdNotificationsSecretName, Namespace: "gitops"}, Data: map[string][]byte{"user-token": []byte("keep")}}, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: argocdTLSCertsConfigMapName, Namespace: "gitops"}, Data: map[string]string{"git.example": "keep"}}).Build()
-	return &ReconcileGitopsService{Client: c, Scheme: scheme}, owner
+	owner := &pipelinesv1alpha1.GitopsService{ObjectMeta: metav1.ObjectMeta{Name: "cluster", UID: "owner"}}
+	argoCD := &argoapp.ArgoCD{
+		ObjectMeta: metav1.ObjectMeta{Name: common.ArgoCDInstanceName, Namespace: serviceNamespace},
+		Spec:       argoapp.ArgoCDSpec{AI: &argoapp.ArgoCDAISpec{Troubleshooting: true}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(owner, argoCD).Build()
+	r := &ReconcileGitopsService{Client: c, Scheme: scheme, EnableAIFeatures: true}
+	return r, owner
 }
 
-func TestAgenticSetupWaitsForDependenciesAndDisablesCleanly(t *testing.T) {
+func TestAgenticSetupCreatesResourcesAndDisablesCleanly(t *testing.T) {
 	r, owner := agenticControllerFixture(t)
 	ctx := context.Background()
 	key := types.NamespacedName{Namespace: "gitops"}
+
+	// First reconcile: should create all owned K8s resources (no requeue needed).
 	result, err := r.reconcileAgenticTriggerService(key, owner, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.RequeueAfter != 5*time.Second {
-		t.Fatalf("requeue=%v", result)
+	if result.RequeueAfter != 0 {
+		t.Fatalf("unexpected requeue: %v", result)
 	}
+
+	// Token secret should be created and owned.
 	token := &corev1.Secret{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: agenticNotifTokenSecretName, Namespace: "gitops"}, token); err != nil {
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: notifications.TokenSecretName, Namespace: "gitops"}, token); err != nil {
 		t.Fatal(err)
 	}
 	if !metav1.IsControlledBy(token, owner) {
 		t.Fatal("token has no owner")
 	}
-	token.Data = map[string][]byte{"token": []byte("populated")}
-	if err := r.Client.Update(ctx, token); err != nil {
-		t.Fatal(err)
-	}
-	ca := &corev1.ConfigMap{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: agenticTriggerCAConfigMapName, Namespace: "gitops"}, ca); err != nil {
-		t.Fatal(err)
-	}
-	ca.Data = map[string]string{serviceServingCABundleKey: "ca"}
-	if err := r.Client.Update(ctx, ca); err != nil {
-		t.Fatal(err)
-	}
-	result, err = r.reconcileAgenticTriggerService(key, owner, logr.Discard())
-	if err != nil || result.RequeueAfter != 0 {
-		t.Fatalf("ready=%v err=%v", result, err)
-	}
-	notif := &corev1.Secret{}
-	_ = r.Client.Get(ctx, types.NamespacedName{Name: argocdNotificationsSecretName, Namespace: "gitops"}, notif)
-	if string(notif.Data[agenticTriggerTokenKey]) != "populated" {
-		t.Fatal("token not copied")
-	}
-	nc := &argov1alpha1.NotificationsConfiguration{}
-	_ = r.Client.Get(ctx, types.NamespacedName{Name: defaultNotificationsConfigurationName, Namespace: "gitops"}, nc)
-	if !strings.Contains(nc.Spec.Subscriptions["subscriptions"], "slack:ops") {
-		t.Fatal("user subscription lost")
-	}
-	owner.Annotations[agentic.EnabledAnnotation] = "false"
+
+	// Disable at the ArgoCD CR level.
+	argoCD := &argoapp.ArgoCD{}
+	_ = r.Client.Get(ctx, types.NamespacedName{Name: common.ArgoCDInstanceName, Namespace: serviceNamespace}, argoCD)
+	argoCD.Spec.AI.Troubleshooting = false
+	_ = r.Client.Update(ctx, argoCD)
+
 	if _, err = r.reconcileAgenticTriggerService(key, owner, logr.Discard()); err != nil {
 		t.Fatal(err)
 	}
+	// Deployment and token secret should be deleted.
 	if err = r.Client.Get(ctx, types.NamespacedName{Name: agenticTriggerServiceName, Namespace: "gitops"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("deployment retained: %v", err)
 	}
-	_ = r.Client.Get(ctx, types.NamespacedName{Name: argocdNotificationsSecretName, Namespace: "gitops"}, notif)
-	if _, ok := notif.Data[agenticTriggerTokenKey]; ok {
-		t.Fatal("integration credential retained")
-	}
-	if string(notif.Data["user-token"]) != "keep" {
-		t.Fatal("user credential lost")
-	}
-	_ = r.Client.Get(ctx, types.NamespacedName{Name: defaultNotificationsConfigurationName, Namespace: "gitops"}, nc)
-	if strings.Contains(nc.Spec.Subscriptions["subscriptions"], "agentic-trigger") || !strings.Contains(nc.Spec.Subscriptions["subscriptions"], "slack:ops") {
-		t.Fatal("incorrect subscription cleanup")
+	if err = r.Client.Get(ctx, types.NamespacedName{Name: notifications.TokenSecretName, Namespace: "gitops"}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("token secret retained: %v", err)
 	}
 }
+
+// NotificationsConfiguration patching, token propagation, and CA propagation are
+// tested in the argocd-operator's ai_notifications_test.go; this package only
+// verifies that the gitops-operator creates and deletes the infrastructure objects.
 
 func TestAgenticTLSReconciliationPreservesServiceAddress(t *testing.T) {
 	r, owner := agenticControllerFixture(t)
@@ -142,130 +123,44 @@ func TestAgenticTLSReconciliationPreservesServiceAddress(t *testing.T) {
 	}
 }
 
-func TestAgenticAnnotationOverridesEnvironment(t *testing.T) {
-	t.Setenv(agenticIntegrationEnabledEnv, "true")
-	owner := &pipelinesv1alpha1.GitopsService{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{agentic.EnabledAnnotation: "false"}}}
-	if agenticEnabled(owner) {
-		t.Fatal("false annotation ignored")
-	}
-	delete(owner.Annotations, agentic.EnabledAnnotation)
-	if !agenticEnabled(owner) {
-		t.Fatal("environment ignored")
-	}
-	t.Setenv(agenticIntegrationEnabledEnv, "false")
-	owner.Annotations[agentic.EnabledAnnotation] = "true"
-	if !agenticEnabled(owner) {
-		t.Fatal("true annotation ignored")
-	}
-}
-
-func TestAgenticAnnotationOnlyUpdate(t *testing.T) {
-	old := &pipelinesv1alpha1.GitopsService{ObjectMeta: metav1.ObjectMeta{Generation: 1}}
-	current := old.DeepCopy()
-	current.Annotations = map[string]string{agentic.EnabledAnnotation: "true"}
-	if !agenticAnnotationsChanged(old, current) {
-		t.Fatal("annotation-only enablement ignored")
-	}
-	current.Annotations[agentic.EnabledAnnotation] = ""
-	if !agenticAnnotationsChanged(old, current) {
-		t.Fatal("explicit annotation presence ignored")
-	}
-	current.Annotations = map[string]string{"unrelated": "value"}
-	if agenticAnnotationsChanged(old, current) {
-		t.Fatal("unrelated annotation triggered agentic update")
-	}
-}
-
-func TestMergeAgenticSubscriptions(t *testing.T) {
-	original := "- recipients: [slack:ops, agentic-trigger]\n  triggers: [on-sync-failed, on-agentic-diagnose]\n  selector: team=platform\n"
-	enabled, err := mergeAgenticSubscription(original, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	again, err := mergeAgenticSubscription(enabled, true)
-	if err != nil || again != enabled {
-		t.Fatal("merge not idempotent")
-	}
-	disabled, err := mergeAgenticSubscription(enabled, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(disabled, "slack:ops") || !strings.Contains(disabled, "on-sync-failed") || !strings.Contains(disabled, "team=platform") {
-		t.Fatal("user configuration lost")
-	}
-	for _, invalid := range []string{"not: a-list", "- recipients: slack:ops", "[broken"} {
-		if _, err := mergeAgenticSubscription(invalid, true); err == nil {
-			t.Fatalf("accepted %q", invalid)
-		}
-	}
-}
-
-func TestAgenticNotificationEngineDeliversEarlyHealthAndAllowsRedelivery(t *testing.T) {
-	var clauses []triggers.Condition
-	if err := yaml.Unmarshal([]byte(agenticNotificationTrigger()), &clauses); err != nil {
-		t.Fatal(err)
-	}
-	engine, err := triggers.NewService(map[string][]triggers.Condition{"diagnose": clauses})
-	if err != nil {
-		t.Fatal(err)
-	}
-	created := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
-	now := created.Add(time.Second) // Before the default diagnosis grace expires.
-	app := map[string]any{"metadata": map[string]any{"uid": "app-uid", "creationTimestamp": created.Format(time.RFC3339)}, "status": map[string]any{"health": map[string]any{"status": "Degraded", "lastTransitionTime": created.Format(time.RFC3339)}, "sync": map[string]any{"revisions": []any{"a", "b"}}}}
-	vars := map[string]any{"app": app, "time": map[string]any{"Now": func() time.Time { return now }}}
-	for i, health := range []string{"Degraded", "Unknown", "Missing", "Progressing", "Healthy", "Suspended"} {
-		app["status"].(map[string]any)["health"].(map[string]any)["status"] = health
-		result, err := engine.Run("diagnose", vars)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(result) != len(clauses) || !result[i].Triggered || result[i].OncePer == "" {
-			t.Fatalf("%s was not delivered immediately: %+v", health, result)
-		}
-		for j, clause := range result {
-			if j != i && clause.Triggered {
-				t.Fatalf("%s also triggered clause %d", health, j)
-			}
-		}
-	}
-	app["status"].(map[string]any)["health"].(map[string]any)["status"] = "Degraded"
-	first, err := engine.Run("diagnose", vars)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now = now.Add(time.Minute)
-	retry, err := engine.Run("diagnose", vars)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !retry[0].Triggered || retry[0].OncePer == first[0].OncePer {
-		t.Fatal("a later notification evaluation cannot redeliver")
-	}
-}
-
-func TestAgenticMalformedSubscriptionPreserved(t *testing.T) {
+func TestAgenticOperatorFlagGatesIntegration(t *testing.T) {
 	r, owner := agenticControllerFixture(t)
-	ctx := context.Background()
-	nc := &argov1alpha1.NotificationsConfiguration{}
-	key := client.ObjectKey{Name: defaultNotificationsConfigurationName, Namespace: "gitops"}
-	_ = r.Client.Get(ctx, key, nc)
-	nc.Spec.Subscriptions["subscriptions"] = "[broken"
-	_ = r.Client.Update(ctx, nc)
-	_, err := r.reconcileAgenticTriggerService(types.NamespacedName{Namespace: "gitops"}, owner, logr.Discard())
-	if err == nil {
-		t.Fatal("expected malformed subscription error")
+	r.EnableAIFeatures = false
+	key := types.NamespacedName{Namespace: "gitops"}
+	if _, err := r.reconcileAgenticTriggerService(key, owner, logr.Discard()); err != nil {
+		t.Fatal(err)
 	}
-	_ = r.Client.Get(ctx, key, nc)
-	if nc.Spec.Subscriptions["subscriptions"] != "[broken" {
-		t.Fatal("malformed YAML overwritten")
+	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: agenticTriggerServiceName, Namespace: "gitops"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
+		t.Fatal("deployment created despite flag being off")
+	}
+}
+
+func TestAgenticArgoCDOptInGatesIntegration(t *testing.T) {
+	r, owner := agenticControllerFixture(t)
+	argoCD := &argoapp.ArgoCD{}
+	_ = r.Client.Get(context.Background(), types.NamespacedName{Name: common.ArgoCDInstanceName, Namespace: serviceNamespace}, argoCD)
+	argoCD.Spec.AI.Troubleshooting = false
+	_ = r.Client.Update(context.Background(), argoCD)
+	key := types.NamespacedName{Namespace: "gitops"}
+	if _, err := r.reconcileAgenticTriggerService(key, owner, logr.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: agenticTriggerServiceName, Namespace: "gitops"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
+		t.Fatal("deployment created despite ArgoCD opt-in being off")
 	}
 }
 
 func TestAgenticUnownedDeploymentIsPreserved(t *testing.T) {
-	for _, enabled := range []string{"true", "false"} {
-		t.Run(enabled, func(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
 			r, owner := agenticControllerFixture(t)
-			owner.Annotations[agentic.EnabledAnnotation] = enabled
+			r.EnableAIFeatures = enabled
+			if !enabled {
+				argoCD := &argoapp.ArgoCD{}
+				_ = r.Client.Get(context.Background(), types.NamespacedName{Name: common.ArgoCDInstanceName, Namespace: serviceNamespace}, argoCD)
+				argoCD.Spec.AI.Troubleshooting = false
+				_ = r.Client.Update(context.Background(), argoCD)
+			}
 			ctx := context.Background()
 			deployment := newAgenticTriggerDeployment("gitops", true)
 			if err := r.Client.Create(ctx, deployment); err != nil {
@@ -302,5 +197,25 @@ func TestAgenticOwnedResourceRecreated(t *testing.T) {
 	}
 	if err := r.Client.Get(context.Background(), client.ObjectKeyFromObject(obj), obj); err != nil {
 		t.Fatal(fmt.Errorf("not recreated: %w", err))
+	}
+}
+
+func TestAgenticSubscriptionMergeInNotifications(t *testing.T) {
+	// Verify the subscription value produced by notifications.MergeSubscription
+	// (the canonical implementation) is preserved when AI is enabled then disabled.
+	original := "- recipients: [slack:ops, agentic-trigger]\n  triggers: [on-sync-failed, on-agentic-diagnose]\n  selector: team=platform\n"
+	enabled, err := notifications.MergeSubscription(original, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := notifications.MergeSubscription(enabled, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(disabled, "slack:ops") || !strings.Contains(disabled, "on-sync-failed") {
+		t.Fatal("user subscription entries lost after disable")
+	}
+	if strings.Contains(disabled, "agentic-trigger") || strings.Contains(disabled, "on-agentic-diagnose") {
+		t.Fatal("AI entries still present after disable")
 	}
 }

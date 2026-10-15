@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
-	argov1alpha1 "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1alpha1"
+	argoapp "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	"github.com/go-logr/logr"
 	pipelinesv1alpha1 "github.com/redhat-developer/gitops-operator/api/v1alpha1"
+	"github.com/redhat-developer/gitops-operator/common"
 	"github.com/redhat-developer/gitops-operator/internal/agentic"
+	"github.com/redhat-developer/gitops-operator/internal/ai/notifications"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -21,54 +23,45 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/yaml"
 )
 
-const (
-	agenticNotifTriggerKey                = "trigger.on-agentic-diagnose"
-	agenticNotifTemplateKey               = "template.agentic-diagnose"
-	agenticNotifServiceKey                = "service.webhook.agentic-trigger"
-	agenticNotifSubscriptionKey           = "subscriptions"
-	defaultNotificationsConfigurationName = "default-notifications-configuration"
-	agenticNotifTokenSecretName           = "agentic-trigger-notifications-token"
-	argocdNotificationsSecretName         = "argocd-notifications-secret"
-	agenticTriggerTokenKey                = "agentic-trigger-token"
-	argocdTLSCertsConfigMapName           = "argocd-tls-certs-cm"
-	serviceServingCABundleKey             = "service-ca.crt"
-	serviceServingCAAnnotation            = "service.beta.openshift.io/inject-cabundle"
-	agenticTriggerCAConfigMapName         = "agentic-trigger-serving-ca"
-)
+const serviceServingCAAnnotation = "service.beta.openshift.io/inject-cabundle"
 
-func agenticAnnotationsChanged(old, current client.Object) bool {
-	oldValue, oldPresent := old.GetAnnotations()[agentic.EnabledAnnotation]
-	newValue, newPresent := current.GetAnnotations()[agentic.EnabledAnnotation]
-	return oldPresent != newPresent || oldValue != newValue
-}
-
-func agenticEnabled(instance *pipelinesv1alpha1.GitopsService) bool {
-	if value, exists := instance.Annotations[agentic.EnabledAnnotation]; exists {
-		return strings.EqualFold(value, "true")
-	}
-	return strings.EqualFold(os.Getenv(agenticIntegrationEnabledEnv), "true")
-}
-
+// agenticDependencyRequests enqueues a GitopsService reconcile when any of the
+// agentic-trigger supporting resources change (token Secret, CA ConfigMap).
 func (r *ReconcileGitopsService) agenticDependencyRequests(ctx context.Context, obj client.Object) []reconcile.Request {
 	ns, err := GetBackendNamespace(r.Client)
 	if err != nil || obj.GetNamespace() != ns {
 		return nil
 	}
 	switch obj.GetName() {
-	case agenticNotifTokenSecretName, argocdNotificationsSecretName, agenticTriggerCAConfigMapName, argocdTLSCertsConfigMapName, defaultNotificationsConfigurationName:
+	case notifications.TokenSecretName, notifications.CAConfigMap:
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: serviceName}}}
 	}
 	return nil
+}
+
+// isAIEnabled returns true when the operator-level flag is set AND the managed
+// ArgoCD instance has .spec.ai.troubleshooting enabled.
+func (r *ReconcileGitopsService) isAIEnabled(ctx context.Context) bool {
+	if !r.EnableAIFeatures {
+		return false
+	}
+	argoCD := &argoapp.ArgoCD{}
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      common.ArgoCDInstanceName,
+		Namespace: serviceNamespace,
+	}, argoCD); err != nil {
+		return false
+	}
+	return argoCD.Spec.AI != nil && argoCD.Spec.AI.Troubleshooting
 }
 
 func (r *ReconcileGitopsService) reconcileAgenticTriggerService(key types.NamespacedName, instance *pipelinesv1alpha1.GitopsService, logger logr.Logger) (reconcile.Result, error) {
 	ctx := context.TODO()
 	ns := key.Namespace
 	runNS := envOrDefaultCtrl("AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")
-	if !agenticEnabled(instance) {
+	if !r.isAIEnabled(ctx) {
 		return reconcile.Result{}, r.cleanupAgenticTrigger(ctx, ns, runNS, instance)
 	}
 	grace, err := agentic.Duration(os.Getenv("AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD"), 10*time.Minute, true)
@@ -95,23 +88,28 @@ func (r *ReconcileGitopsService) reconcileAgenticTriggerService(key types.Namesp
 		newAgenticTriggerClusterRole(), newAgenticTriggerClusterRoleBinding(ns),
 		newAgenticTriggerRole(runNS), newAgenticTriggerRoleBinding(runNS, ns),
 		deploy, newAgenticTriggerService(ns, tlsEnabled),
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: agenticNotifTokenSecretName, Namespace: ns, Annotations: map[string]string{"kubernetes.io/service-account.name": agenticTriggerNotificationsSAName}}, Type: corev1.SecretTypeServiceAccountToken},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        notifications.TokenSecretName,
+				Namespace:   ns,
+				Annotations: map[string]string{"kubernetes.io/service-account.name": agenticTriggerNotificationsSAName},
+			},
+			Type: corev1.SecretTypeServiceAccountToken,
+		},
 	}
 	if tlsEnabled {
-		objects = append(objects, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: agenticTriggerCAConfigMapName, Namespace: ns, Annotations: map[string]string{serviceServingCAAnnotation: "true"}}})
+		objects = append(objects, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        notifications.CAConfigMap,
+				Namespace:   ns,
+				Annotations: map[string]string{serviceServingCAAnnotation: "true"},
+			},
+		})
 	}
 	for _, obj := range objects {
 		if err := r.reconcileAgenticObject(ctx, instance, obj); err != nil {
 			return reconcile.Result{}, err
 		}
-	}
-	ready, err := r.configureAgenticDependencies(ctx, ns, tlsEnabled)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if !ready {
-		logger.Info("Waiting for agentic notification configuration, token or serving CA")
-		return reconcile.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 	return reconcile.Result{}, nil
 }
@@ -193,189 +191,13 @@ func (r *ReconcileGitopsService) reconcileAgenticObject(ctx context.Context, own
 	return r.Client.Patch(ctx, current, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
 }
 
-func (r *ReconcileGitopsService) configureAgenticDependencies(ctx context.Context, ns string, tlsEnabled bool) (bool, error) {
-	ready := true
-	nc := &argov1alpha1.NotificationsConfiguration{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: defaultNotificationsConfigurationName, Namespace: ns}, nc); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return false, err
-		}
-		ready = false
-	} else {
-		before := nc.DeepCopy()
-		subscriptions, err := mergeAgenticSubscription(nc.Spec.Subscriptions[agenticNotifSubscriptionKey], true)
-		if err != nil {
-			return false, err
-		}
-		if nc.Spec.Subscriptions == nil {
-			nc.Spec.Subscriptions = map[string]string{}
-		}
-		nc.Spec.Subscriptions[agenticNotifSubscriptionKey] = subscriptions
-		if nc.Spec.Triggers == nil {
-			nc.Spec.Triggers = map[string]string{}
-		}
-		nc.Spec.Triggers[agenticNotifTriggerKey] = agenticNotificationTrigger()
-		if nc.Spec.Templates == nil {
-			nc.Spec.Templates = map[string]string{}
-		}
-		nc.Spec.Templates[agenticNotifTemplateKey] = "webhook:\n  agentic-trigger:\n    method: POST\n    path: /api/v1/diagnose\n    body: |\n      {\"application\":\"{{.app.metadata.name}}\",\"applicationNamespace\":\"{{.app.metadata.namespace}}\"}\n"
-		if nc.Spec.Services == nil {
-			nc.Spec.Services = map[string]string{}
-		}
-		scheme, port := "http", 8080
-		if tlsEnabled {
-			scheme, port = "https", 8443
-		}
-		nc.Spec.Services[agenticNotifServiceKey] = fmt.Sprintf("url: %s://%s.%s.svc:%d\nheaders:\n- name: Authorization\n  value: Bearer $agentic-trigger-token\n", scheme, agenticTriggerServiceName, ns, port)
-		if !reflect.DeepEqual(before.Spec, nc.Spec) {
-			if err := r.Client.Patch(ctx, nc, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
-				return false, err
-			}
-		}
-	}
-	token, target := &corev1.Secret{}, &corev1.Secret{}
-	for _, item := range []struct {
-		name string
-		obj  *corev1.Secret
-	}{{agenticNotifTokenSecretName, token}, {argocdNotificationsSecretName, target}} {
-		if err := r.Client.Get(ctx, types.NamespacedName{Name: item.name, Namespace: ns}, item.obj); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return false, err
-			}
-			ready = false
-		}
-	}
-	if len(token.Data["token"]) == 0 || target.ResourceVersion == "" {
-		ready = false
-	} else if string(target.Data[agenticTriggerTokenKey]) != string(token.Data["token"]) {
-		before := target.DeepCopy()
-		if target.Data == nil {
-			target.Data = map[string][]byte{}
-		}
-		target.Data[agenticTriggerTokenKey] = token.Data["token"]
-		if err := r.Client.Patch(ctx, target, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
-			return false, err
-		}
-	}
-	if tlsEnabled {
-		ca, certs := &corev1.ConfigMap{}, &corev1.ConfigMap{}
-		for _, item := range []struct {
-			name string
-			obj  *corev1.ConfigMap
-		}{{agenticTriggerCAConfigMapName, ca}, {argocdTLSCertsConfigMapName, certs}} {
-			if err := r.Client.Get(ctx, types.NamespacedName{Name: item.name, Namespace: ns}, item.obj); err != nil {
-				if !apierrors.IsNotFound(err) {
-					return false, err
-				}
-				ready = false
-			}
-		}
-		host := fmt.Sprintf("%s.%s.svc", agenticTriggerServiceName, ns)
-		if ca.Data[serviceServingCABundleKey] == "" || certs.ResourceVersion == "" {
-			ready = false
-		} else if certs.Data[host] != ca.Data[serviceServingCABundleKey] {
-			before := certs.DeepCopy()
-			if certs.Data == nil {
-				certs.Data = map[string]string{}
-			}
-			certs.Data[host] = ca.Data[serviceServingCABundleKey]
-			if err := r.Client.Patch(ctx, certs, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
-				return false, err
-			}
-		}
-	}
-	return ready, nil
-}
-
-// Split only the integration's recipient/trigger pair out of user subscriptions.
-// Maps preserve other supported fields rather than round-tripping a lossy struct.
-func mergeAgenticSubscription(value string, enabled bool) (string, error) {
-	var entries []map[string]any
-	if err := yaml.UnmarshalStrict([]byte(value), &entries); err != nil {
-		return "", fmt.Errorf("invalid notification subscriptions: %w", err)
-	}
-	var result []map[string]any
-	for _, entry := range entries {
-		recipients, rok := entry["recipients"].([]any)
-		if !rok {
-			return "", fmt.Errorf("subscription recipients must be a list")
-		}
-		triggers, tok := entry["triggers"].([]any)
-		if entry["triggers"] != nil && !tok {
-			return "", fmt.Errorf("subscription triggers must be a list")
-		}
-		var otherRecipients, otherTriggers []any
-		hasRecipient, hasTrigger := false, false
-		for _, r := range recipients {
-			if _, ok := r.(string); !ok {
-				return "", fmt.Errorf("subscription recipient must be a string")
-			}
-			if r == agenticTriggerServiceName {
-				hasRecipient = true
-			} else {
-				otherRecipients = append(otherRecipients, r)
-			}
-		}
-		for _, t := range triggers {
-			if _, ok := t.(string); !ok {
-				return "", fmt.Errorf("subscription trigger must be a string")
-			}
-			if t == "on-agentic-diagnose" {
-				hasTrigger = true
-			} else {
-				otherTriggers = append(otherTriggers, t)
-			}
-		}
-		if !hasRecipient || !hasTrigger {
-			result = append(result, entry)
-			continue
-		}
-		if len(otherRecipients) > 0 {
-			copy := map[string]any{}
-			for k, v := range entry {
-				copy[k] = v
-			}
-			copy["recipients"] = otherRecipients
-			result = append(result, copy)
-		}
-		if len(otherTriggers) > 0 {
-			entry["recipients"] = []any{agenticTriggerServiceName}
-			entry["triggers"] = otherTriggers
-			result = append(result, entry)
-		}
-	}
-	if enabled {
-		result = append(result, map[string]any{"recipients": []any{agenticTriggerServiceName}, "triggers": []any{"on-agentic-diagnose"}})
-	}
-	if len(result) == 0 {
-		return "", nil
-	}
-	b, err := yaml.Marshal(result)
-	return string(b), err
-}
-
-func agenticNotificationTrigger() string {
-	// The epoch allows redelivery if Notifications evaluates the Application
-	// again after a lost webhook. It does not schedule that evaluation; once a
-	// webhook arrives, the trigger workqueue owns the grace deadline.
-	once := "  oncePer: app.metadata.uid + ':' + toJSON(app.status.sync.revisions ?? [app.status.sync.revision ?? '']) + ':' + (app.status.health.lastTransitionTime ?? '') + ':' + string(int(time.Now().Unix() / 60))\n"
-	var b strings.Builder
-	for _, h := range []string{"Degraded", "Unknown", "Missing", "Progressing", "Healthy", "Suspended"} {
-		fmt.Fprintf(&b, "- when: app.status.health.status == '%s'\n", h)
-		b.WriteString(once + "  send: [agentic-diagnose]\n")
-	}
-	return b.String()
-}
-
 func (r *ReconcileGitopsService) cleanupAgenticTrigger(ctx context.Context, ns, runNS string, owner *pipelinesv1alpha1.GitopsService) error {
-	// Stop accepting work before editing configuration.
-	integrationPresent := false
+	// Scale down first to stop accepting new work.
 	deploy := &appsv1.Deployment{}
 	if err := r.Client.Get(ctx, types.NamespacedName{Name: agenticTriggerServiceName, Namespace: ns}, deploy); err == nil {
 		if !metav1.IsControlledBy(deploy, owner) {
 			return fmt.Errorf("refusing to remove agentic Deployment not owned by GitopsService %s", owner.Name)
 		}
-		integrationPresent = true
 		before := deploy.DeepCopy()
 		zero := int32(0)
 		deploy.Spec.Replicas = &zero
@@ -387,67 +209,19 @@ func (r *ReconcileGitopsService) cleanupAgenticTrigger(ctx context.Context, ns, 
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
-	nc := &argov1alpha1.NotificationsConfiguration{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: defaultNotificationsConfigurationName, Namespace: ns}, nc); err == nil {
-		if _, exists := nc.Spec.Triggers[agenticNotifTriggerKey]; exists {
-			integrationPresent = true
-		}
-		if _, exists := nc.Spec.Services[agenticNotifServiceKey]; exists {
-			integrationPresent = true
-		}
-		if !integrationPresent {
-			return nil
-		}
-		before := nc.DeepCopy()
-		value, err := mergeAgenticSubscription(nc.Spec.Subscriptions[agenticNotifSubscriptionKey], false)
-		if err != nil {
-			return err
-		}
-		delete(nc.Spec.Triggers, agenticNotifTriggerKey)
-		delete(nc.Spec.Templates, agenticNotifTemplateKey)
-		delete(nc.Spec.Services, agenticNotifServiceKey)
-		if value == "" {
-			delete(nc.Spec.Subscriptions, agenticNotifSubscriptionKey)
-		} else {
-			nc.Spec.Subscriptions[agenticNotifSubscriptionKey] = value
-		}
-		if !reflect.DeepEqual(before.Spec, nc.Spec) {
-			if err := r.Client.Patch(ctx, nc, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
-				return err
-			}
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return err
+
+	// Delete all owned K8s resources. The argocd-operator's reconcileAINotifications
+	// is responsible for cleaning up the NotificationsConfiguration entries, token,
+	// and TLS CA when .spec.ai.troubleshooting becomes false.
+	objects := []client.Object{
+		newAgenticTriggerDeployment(ns, true), newAgenticTriggerService(ns, true),
+		newAgenticTriggerRoleBinding(runNS, ns), newAgenticTriggerRole(runNS),
+		newAgenticTriggerClusterRoleBinding(ns), newAgenticTriggerClusterRole(),
+		newAgenticTriggerServiceAccount(ns), newAgenticTriggerNotificationsServiceAccount(ns),
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: notifications.TokenSecretName, Namespace: ns}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: agenticTriggerServiceName + "-tls", Namespace: ns}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: notifications.CAConfigMap, Namespace: ns}},
 	}
-	if !integrationPresent {
-		return nil
-	}
-	secret := &corev1.Secret{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: argocdNotificationsSecretName, Namespace: ns}, secret); err == nil {
-		if _, exists := secret.Data[agenticTriggerTokenKey]; exists {
-			before := secret.DeepCopy()
-			delete(secret.Data, agenticTriggerTokenKey)
-			if err := r.Client.Patch(ctx, secret, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
-				return err
-			}
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return err
-	}
-	certs := &corev1.ConfigMap{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: argocdTLSCertsConfigMapName, Namespace: ns}, certs); err == nil {
-		host := fmt.Sprintf("%s.%s.svc", agenticTriggerServiceName, ns)
-		if _, exists := certs.Data[host]; exists {
-			before := certs.DeepCopy()
-			delete(certs.Data, host)
-			if err := r.Client.Patch(ctx, certs, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
-				return err
-			}
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return err
-	}
-	objects := []client.Object{newAgenticTriggerDeployment(ns, true), newAgenticTriggerService(ns, true), newAgenticTriggerRoleBinding(runNS, ns), newAgenticTriggerRole(runNS), newAgenticTriggerClusterRoleBinding(ns), newAgenticTriggerClusterRole(), newAgenticTriggerServiceAccount(ns), newAgenticTriggerNotificationsServiceAccount(ns), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: agenticNotifTokenSecretName, Namespace: ns}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: agenticTriggerServiceName + "-tls", Namespace: ns}}, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: agenticTriggerCAConfigMapName, Namespace: ns}}}
 	for _, obj := range objects {
 		if err := r.Client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			return err

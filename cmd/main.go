@@ -112,6 +112,10 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", enableHTTP2, "If HTTP/2 should be enabled for the metrics and webhook servers.")
 	flag.BoolVar(&disableClusterTLSProfile, "disable-cluster-tls-profile", false, "Disable use of the cluster TLS security profile")
 	flag.BoolVar(&secureMetrics, "metrics-secure", secureMetrics, "If the metrics endpoint should be served securely.")
+	enableAIFeatures := strings.EqualFold(os.Getenv("ENABLE_AI_FEATURES"), "true")
+	flag.BoolVar(&enableAIFeatures, "enable-ai-features", enableAIFeatures,
+		"Enable AI-assisted GitOps features such as automated application diagnosis. "+
+			"Also controllable via the ENABLE_AI_FEATURES environment variable.")
 
 	//Configure log level
 	logLevelStr := strings.ToLower(os.Getenv("LOG_LEVEL"))
@@ -324,6 +328,7 @@ func main() {
 			DisableDefaultInstall: strings.ToLower(os.Getenv(common.DisableDefaultInstallEnvVar)) == "true",
 			CentralTLSProfile:     profile,
 			PluginNamespace:       pluginNamespace,
+			EnableAIFeatures:      enableAIFeatures,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "GitopsService")
 			os.Exit(1)
