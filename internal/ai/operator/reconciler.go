@@ -81,6 +81,9 @@ func ReconcileAgenticTriggerService(
 			e.Value = grace.String()
 		}
 	}
+	if err := ensureNamespace(ctx, cl, runNS); err != nil {
+		return reconcile.Result{}, fmt.Errorf("ensure namespace %s: %w", runNS, err)
+	}
 	objects := []client.Object{
 		NewServiceAccount(ns), NewNotificationsServiceAccount(ns),
 		NewClusterRole(), NewClusterRoleBinding(ns),
@@ -200,6 +203,20 @@ func reconcileAgenticObject(ctx context.Context, cl client.Client, scheme *runti
 		return nil
 	}
 	return cl.Patch(ctx, current, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+}
+
+func ensureNamespace(ctx context.Context, cl client.Client, name string) error {
+	ns := &corev1.Namespace{}
+	err := cl.Get(ctx, types.NamespacedName{Name: name}, ns)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	return cl.Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+	})
 }
 
 func cleanupAgenticTrigger(ctx context.Context, cl client.Client, ns, runNS string, owner *pipelinesv1alpha1.GitopsService) error {
