@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -20,9 +21,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-const testServiceNamespace = "openshift-gitops"
+const testServiceNamespace = "gitops"
 
 func agenticOperatorFixture(t *testing.T) (client.Client, *runtime.Scheme, *pipelinesv1alpha1.GitopsService) {
 	t.Helper()
@@ -188,5 +190,56 @@ func TestAgenticSubscriptionMergeInNotifications(t *testing.T) {
 	}
 	if strings.Contains(disabled, "agentic-trigger") || strings.Contains(disabled, "on-agentic-diagnose") {
 		t.Fatal("AI entries still present after disable")
+	}
+}
+
+func TestAgenticArgoCDReadErrorPreservesResources(t *testing.T) {
+	cl, scheme, owner := agenticOperatorFixture(t)
+	doReconcile(t, cl, scheme, owner, true, testServiceNamespace)
+	wantErr := errors.New("temporary API failure")
+	failing := interceptor.NewClient(cl.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*argoapp.ArgoCD); ok {
+				return wantErr
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	_, err := ReconcileAgenticTriggerService(failing, scheme, true, testServiceNamespace, types.NamespacedName{}, owner, logr.Discard())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected API error, got %v", err)
+	}
+	deployment := &appsv1.Deployment{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: ServiceName, Namespace: testServiceNamespace}, deployment); err != nil {
+		t.Fatal(err)
+	}
+	if deployment.Spec.Replicas == nil || *deployment.Spec.Replicas != 1 {
+		t.Fatal("API failure scaled down the deployment")
+	}
+}
+
+func TestAgenticDependencyRequests(t *testing.T) {
+	mapper := DependencyRequests(testServiceNamespace)
+	for _, tc := range []struct {
+		name string
+		obj  client.Object
+		want int
+	}{
+		{"ArgoCD opt-in", &argoapp.ArgoCD{ObjectMeta: metav1.ObjectMeta{Name: common.ArgoCDInstanceName, Namespace: testServiceNamespace}}, 1},
+		{"another ArgoCD", &argoapp.ArgoCD{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: testServiceNamespace}}, 0},
+		{"another namespace", &argoapp.ArgoCD{ObjectMeta: metav1.ObjectMeta{Name: common.ArgoCDInstanceName, Namespace: "other"}}, 0},
+		{"token", &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: notifications.TokenSecretName, Namespace: testServiceNamespace}}, 1},
+		{"CA", &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: notifications.CAConfigMap, Namespace: testServiceNamespace}}, 1},
+		{"unrelated secret", &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: testServiceNamespace}}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := mapper(context.Background(), tc.obj)
+			if len(requests) != tc.want {
+				t.Fatalf("got requests %v, want %d", requests, tc.want)
+			}
+			if len(requests) > 0 && requests[0].NamespacedName != (types.NamespacedName{Name: "cluster"}) {
+				t.Fatalf("wrong GitopsService request: %v", requests)
+			}
+		})
 	}
 }

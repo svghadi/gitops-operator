@@ -978,8 +978,8 @@ spec:
                 - name: LABEL_SELECTOR
                 - name: DISABLE_CLUSTER_TLS_PROFILE
                   value: "false"
-                - name: ENABLE_AGENTIC_GITOPS_INTEGRATION
-                  value: "true"
+                - name: ENABLE_AI_FEATURES
+                  value: "false"
                 - name: AGENTIC_TRIGGER_TLS_ENABLED
                   value: "false"
                 - name: AGENTIC_RUN_NAMESPACE

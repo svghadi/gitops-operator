@@ -2,6 +2,7 @@ package argocd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -9,10 +10,12 @@ import (
 
 	"github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1alpha1"
 	argoproj "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
+	aiconfig "github.com/argoproj-labs/gitops-operator/argocd-operator/pkg/ai"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 )
 
@@ -27,10 +30,46 @@ const (
 	aiTLSCertsConfigMapName   = "argocd-tls-certs-cm"
 	aiCABundleKey             = "service-ca.crt"
 	aiCAConfigMapName         = "agentic-trigger-serving-ca"
-	aiTriggerServiceName      = "agentic-trigger"
+	aiTriggerServiceName      = aiconfig.ServiceName
+	aiWebhookName             = "agentic-trigger"
 	aiTriggerTLSEnv           = "AGENTIC_TRIGGER_TLS_ENABLED"
 	enableAIFeaturesEnv       = "ENABLE_AI_FEATURES"
 )
+
+// Missing dependencies are expected while the service-account and service-CA
+// controllers populate their resources. The reconciler schedules a short retry.
+var errAINotificationsPending = errors.New("waiting for AI notification configuration, token or serving CA")
+
+// aiNotificationDependencyRequests routes source and destination changes to
+// ArgoCD, including resources that may not carry an ArgoCD owner reference.
+func (r *ReconcileArgoCD) aiNotificationDependencyRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	switch obj.(type) {
+	case *corev1.Secret:
+		if obj.GetName() != aiTriggerTokenSecretName && obj.GetName() != aiNotificationsSecretName {
+			return nil
+		}
+	case *corev1.ConfigMap:
+		if obj.GetName() != aiCAConfigMapName && obj.GetName() != aiTLSCertsConfigMapName {
+			return nil
+		}
+	case *v1alpha1.NotificationsConfiguration:
+		if obj.GetName() != DefaultNotificationsConfigurationInstanceName {
+			return nil
+		}
+	default:
+		return nil
+	}
+	instances := &argoproj.ArgoCDList{}
+	if err := r.List(ctx, instances, client.InNamespace(obj.GetNamespace())); err != nil {
+		log.Error(err, "unable to find ArgoCD instances for AI dependency update")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(instances.Items))
+	for _, instance := range instances.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&instance)})
+	}
+	return requests
+}
 
 // AINotificationsEnabled returns true when the operator-level ENABLE_AI_FEATURES
 // env var is set and the ArgoCD instance has opted in via .spec.ai.troubleshooting.
@@ -53,7 +92,7 @@ func (r *ReconcileArgoCD) reconcileAINotifications(cr *argoproj.ArgoCD) error {
 	nc := &v1alpha1.NotificationsConfiguration{}
 	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: DefaultNotificationsConfigurationInstanceName, Namespace: ns}, nc); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil // NC not created yet; will retry on next reconcile
+			return errAINotificationsPending
 		}
 		return err
 	}
@@ -92,17 +131,17 @@ func (r *ReconcileArgoCD) reconcileAINotifications(cr *argoproj.ArgoCD) error {
 	token := &corev1.Secret{}
 	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: aiTriggerTokenSecretName, Namespace: ns}, token); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil // token secret not yet created by gitops-operator; retry later
+			return errAINotificationsPending
 		}
 		return err
 	}
 	if len(token.Data["token"]) == 0 {
-		return nil // token not yet populated by service-account controller; retry later
+		return errAINotificationsPending
 	}
 	notifSecret := &corev1.Secret{}
 	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: aiNotificationsSecretName, Namespace: ns}, notifSecret); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			return errAINotificationsPending
 		}
 		return err
 	}
@@ -125,17 +164,17 @@ func (r *ReconcileArgoCD) reconcileAINotifications(cr *argoproj.ArgoCD) error {
 	ca := &corev1.ConfigMap{}
 	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: aiCAConfigMapName, Namespace: ns}, ca); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil // CA configmap not yet created by gitops-operator; retry later
+			return errAINotificationsPending
 		}
 		return err
 	}
 	if ca.Data[aiCABundleKey] == "" {
-		return nil // CA not yet injected by OpenShift service-ca operator; retry later
+		return errAINotificationsPending
 	}
 	certs := &corev1.ConfigMap{}
 	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: aiTLSCertsConfigMapName, Namespace: ns}, certs); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			return errAINotificationsPending
 		}
 		return err
 	}
@@ -157,29 +196,27 @@ func (r *ReconcileArgoCD) cleanupAINotifications(cr *argoproj.ArgoCD) error {
 	ns := cr.Namespace
 
 	nc := &v1alpha1.NotificationsConfiguration{}
-	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: DefaultNotificationsConfigurationInstanceName, Namespace: ns}, nc); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	before := nc.DeepCopy()
-	value, err := mergeAISubscription(nc.Spec.Subscriptions[aiNotifSubscriptionKey], false)
-	if err != nil {
-		return err
-	}
-	delete(nc.Spec.Triggers, aiNotifTriggerKey)
-	delete(nc.Spec.Templates, aiNotifTemplateKey)
-	delete(nc.Spec.Services, aiNotifServiceKey)
-	if value == "" {
-		delete(nc.Spec.Subscriptions, aiNotifSubscriptionKey)
-	} else {
-		nc.Spec.Subscriptions[aiNotifSubscriptionKey] = value
-	}
-	if !reflect.DeepEqual(before.Spec, nc.Spec) {
-		if err := r.Client.Patch(context.TODO(), nc, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: DefaultNotificationsConfigurationInstanceName, Namespace: ns}, nc); err == nil {
+		before := nc.DeepCopy()
+		value, err := mergeAISubscription(nc.Spec.Subscriptions[aiNotifSubscriptionKey], false)
+		if err != nil {
 			return err
 		}
+		delete(nc.Spec.Triggers, aiNotifTriggerKey)
+		delete(nc.Spec.Templates, aiNotifTemplateKey)
+		delete(nc.Spec.Services, aiNotifServiceKey)
+		if value == "" {
+			delete(nc.Spec.Subscriptions, aiNotifSubscriptionKey)
+		} else {
+			nc.Spec.Subscriptions[aiNotifSubscriptionKey] = value
+		}
+		if !reflect.DeepEqual(before.Spec, nc.Spec) {
+			if err := r.Client.Patch(context.TODO(), nc, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+				return err
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return err
 	}
 
 	secret := &corev1.Secret{}
@@ -248,7 +285,7 @@ func mergeAISubscription(value string, enabled bool) (string, error) {
 			if _, ok := rec.(string); !ok {
 				return "", fmt.Errorf("subscription recipient must be a string")
 			}
-			if rec == aiTriggerServiceName {
+			if rec == aiWebhookName {
 				hasRecipient = true
 			} else {
 				otherRecipients = append(otherRecipients, rec)
@@ -277,14 +314,14 @@ func mergeAISubscription(value string, enabled bool) (string, error) {
 			result = append(result, cp)
 		}
 		if len(otherTriggers) > 0 {
-			entry["recipients"] = []any{aiTriggerServiceName}
+			entry["recipients"] = []any{aiWebhookName}
 			entry["triggers"] = otherTriggers
 			result = append(result, entry)
 		}
 	}
 	if enabled {
 		result = append(result, map[string]any{
-			"recipients": []any{aiTriggerServiceName},
+			"recipients": []any{aiWebhookName},
 			"triggers":   []any{"on-agentic-diagnose"},
 		})
 	}

@@ -22,29 +22,21 @@ var _ reconcile.Reconciler = &AgenticTriggerReconciler{}
 // Deployment and its supporting resources (RBAC, Service, token Secret, CA
 // ConfigMap) in the openshift-gitops namespace.
 type AgenticTriggerReconciler struct {
-	Client            client.Client
-	Scheme            *runtime.Scheme
-	EnableAIFeatures  bool
-	OperatorNamespace string
-}
-
-// enqueueForArgoCD maps any ArgoCD change to a reconcile request for the
-// cluster-level GitopsService, so toggling spec.ai.troubleshooting triggers
-// the ai-controller deployment to be created or removed immediately.
-func enqueueForArgoCD(_ context.Context, _ client.Object) []reconcile.Request {
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "cluster"}}}
+	Client           client.Client
+	Scheme           *runtime.Scheme
+	EnableAIFeatures bool
 }
 
 // SetupWithManager registers the controller. It watches GitopsService as its
-// primary resource and also reacts to changes in the token Secret, CA ConfigMap,
-// and ArgoCD CR so that toggling spec.ai.troubleshooting takes effect immediately.
+// primary resource and reacts to ArgoCD opt-in changes and updates to the token
+// Secret and CA ConfigMap.
 func (r *AgenticTriggerReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	deps := aioperator.DependencyRequests(mgr.GetClient(), GetBackendNamespace)
+	deps := aioperator.DependencyRequests(serviceNamespace)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&pipelinesv1alpha1.GitopsService{}).
+		Watches(&argoapp.ArgoCD{}, handler.EnqueueRequestsFromMapFunc(deps)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(deps)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(deps)).
-		Watches(&argoapp.ArgoCD{}, handler.EnqueueRequestsFromMapFunc(enqueueForArgoCD)).
 		Complete(r)
 }
 
@@ -58,5 +50,5 @@ func (r *AgenticTriggerReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 
-	return aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, r.OperatorNamespace, req.NamespacedName, instance, log)
+	return aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, serviceNamespace, req.NamespacedName, instance, log)
 }

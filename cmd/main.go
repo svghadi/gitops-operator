@@ -142,6 +142,12 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+	// Notification helpers in the embedded Argo CD operator read this setting
+	// from the environment. Apply the parsed flag so both controllers agree.
+	if err := os.Setenv("ENABLE_AI_FEATURES", fmt.Sprint(enableAIFeatures)); err != nil {
+		setupLog.Error(err, "unable to configure AI features")
+		os.Exit(1)
+	}
 	if strings.EqualFold(os.Getenv("DISABLE_CLUSTER_TLS_PROFILE"), "true") {
 		disableClusterTLSProfile = true
 	}
@@ -334,10 +340,9 @@ func main() {
 		}
 
 		if err = (&controllers.AgenticTriggerReconciler{
-			Client:            client,
-			Scheme:            mgr.GetScheme(),
-			EnableAIFeatures:  enableAIFeatures,
-			OperatorNamespace: pluginNamespace,
+			Client:           client,
+			Scheme:           mgr.GetScheme(),
+			EnableAIFeatures: enableAIFeatures,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "AgenticTrigger")
 			os.Exit(1)

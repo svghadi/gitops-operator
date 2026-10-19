@@ -292,8 +292,9 @@ func buildToolsSpec(skillsImage string) map[string]any {
 			map[string]any{
 				"image": skillsImage,
 				"paths": []any{
-					"/skills/argocd-diagnostics",
-					"/skills/argocd-remediation",
+					"/skills/gitops/argo-cluster-debug",
+					"/skills/gitops/argo-knowledge",
+					"/skills/gitops/argo-operations",
 				},
 			},
 		}

@@ -43,8 +43,6 @@ spec:
           value: "false"
         - name: ENABLE_AI_FEATURES
           value: "true"
-        - name: ENABLE_AGENTIC_GITOPS_INTEGRATION
-          value: "true"
         - name: AGENTIC_TRIGGER_TLS_ENABLED
           value: "false"
         - name: AGENTIC_RUN_NAMESPACE

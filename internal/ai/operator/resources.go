@@ -3,6 +3,7 @@ package operator
 import (
 	"os"
 
+	aiconfig "github.com/argoproj-labs/gitops-operator/argocd-operator/pkg/ai"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -12,8 +13,8 @@ import (
 )
 
 const (
-	ServiceName         = "ai-controller"
-	NotificationsSAName = "ai-controller-notifications"
+	ServiceName         = aiconfig.ServiceName
+	NotificationsSAName = aiconfig.NotificationsServiceAccountName
 	ImageEnvName        = "AGENTIC_TRIGGER_IMAGE"
 	DefaultImage        = "ghcr.io/svghadi/gitops-operator-agentic-trigger:latest"
 	SkillsImageEnvName  = "AGENTIC_SKILLS_IMAGE"

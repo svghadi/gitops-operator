@@ -29,16 +29,22 @@ import (
 const serviceServingCAAnnotation = "service.beta.openshift.io/inject-cabundle"
 
 // DependencyRequests returns a handler that enqueues a GitopsService reconcile
-// when any agentic-trigger supporting resource changes. getBackendNS is passed
-// by the caller to avoid a circular import with the controllers package.
-func DependencyRequests(cl client.Client, getBackendNS func(client.Client) (string, error)) func(ctx context.Context, obj client.Object) []reconcile.Request {
+// when the default ArgoCD or an agentic-trigger supporting resource changes.
+func DependencyRequests(namespace string) func(ctx context.Context, obj client.Object) []reconcile.Request {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		ns, err := getBackendNS(cl)
-		if err != nil || obj.GetNamespace() != ns {
+		if obj.GetNamespace() != namespace {
 			return nil
 		}
-		switch obj.GetName() {
-		case notifications.TokenSecretName, notifications.CAConfigMap:
+		matches := false
+		switch obj.(type) {
+		case *argoapp.ArgoCD:
+			matches = obj.GetName() == common.ArgoCDInstanceName
+		case *corev1.Secret:
+			matches = obj.GetName() == notifications.TokenSecretName
+		case *corev1.ConfigMap:
+			matches = obj.GetName() == notifications.CAConfigMap
+		}
+		if matches {
 			return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "cluster"}}}
 		}
 		return nil
@@ -51,15 +57,19 @@ func ReconcileAgenticTriggerService(
 	cl client.Client,
 	scheme *runtime.Scheme,
 	enableAIFeatures bool,
-	operatorNamespace string,
+	argocdNamespace string,
 	key types.NamespacedName,
 	instance *pipelinesv1alpha1.GitopsService,
 	logger logr.Logger,
 ) (reconcile.Result, error) {
 	ctx := context.TODO()
-	ns := operatorNamespace
+	ns := argocdNamespace
 	runNS := envOrDefault("AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")
-	if !isAIEnabled(cl, enableAIFeatures) {
+	enabled, err := isAIEnabled(ctx, cl, enableAIFeatures, ns)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if !enabled {
 		return reconcile.Result{}, cleanupAgenticTrigger(ctx, cl, ns, runNS, instance)
 	}
 	grace, err := agentic.Duration(os.Getenv("AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD"), 10*time.Minute, true)
@@ -115,18 +125,18 @@ func ReconcileAgenticTriggerService(
 	return reconcile.Result{}, nil
 }
 
-func isAIEnabled(cl client.Client, enableAIFeatures bool) bool {
+func isAIEnabled(ctx context.Context, cl client.Client, enableAIFeatures bool, namespace string) (bool, error) {
 	if !enableAIFeatures {
-		return false
+		return false, nil
 	}
 	argoCD := &argoapp.ArgoCD{}
-	if err := cl.Get(context.TODO(), types.NamespacedName{
+	if err := cl.Get(ctx, types.NamespacedName{
 		Name:      common.ArgoCDInstanceName,
-		Namespace: "openshift-gitops",
+		Namespace: namespace,
 	}, argoCD); err != nil {
-		return false
+		return false, client.IgnoreNotFound(err)
 	}
-	return argoCD.Spec.AI != nil && argoCD.Spec.AI.Troubleshooting
+	return argoCD.Spec.AI != nil && argoCD.Spec.AI.Troubleshooting, nil
 }
 
 // reconcileAgenticObject creates or patches a single owned resource, preserving

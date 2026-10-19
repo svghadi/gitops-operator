@@ -1,6 +1,6 @@
 # Automatic Argo CD diagnosis
 
-The GitOps Operator manages an `agentic-trigger` service. Argo CD Notifications
+The GitOps Operator manages an `ai-controller` service. Argo CD Notifications
 sends authenticated Application health events to it; the service reads live
 Application state and creates advisory-only Lightspeed `AgenticRun` resources.
 It does not execute remediation or watch/list Applications.
@@ -8,19 +8,25 @@ It does not execute remediation or watch/list Applications.
 ## Enablement and prerequisites
 
 Install the Lightspeed Agentic Operator and its `AnalysisResult` API, provision
-an analysis Agent, and enable notifications on the default Argo CD instance.
+an analysis Agent, and enable AI features on the operator with
+`ENABLE_AI_FEATURES=true` or `--enable-ai-features=true`. Then opt in the default
+Argo CD instance. AI troubleshooting enables its notifications controller.
 The run namespace must already exist.
 
 ```sh
 oc patch argocd openshift-gitops -n openshift-gitops --type=merge \
-  -p '{"spec":{"notifications":{"enabled":true}}}'
-oc annotate gitopsservice cluster \
-  gitops.openshift.io/agentic-integration-enabled=true --overwrite
+  -p '{"spec":{"ai":{"troubleshooting":true}}}'
 ```
 
-An explicit enablement annotation overrides `ENABLE_AGENTIC_GITOPS_INTEGRATION`,
-including when the annotation is `false`. Without it, the environment setting
-applies (default `false`). Annotation changes trigger reconciliation.
+Both the operator feature flag (default `false`) and `.spec.ai.troubleshooting`
+must be enabled. The command-line flag overrides the environment setting. Argo CD
+changes trigger reconciliation. The former GitopsService annotation and
+`ENABLE_AGENTIC_GITOPS_INTEGRATION` setting are no longer used.
+
+The trigger and its supporting resources run in `openshift-gitops`, alongside
+the default Argo CD instance. The AgenticTrigger controller provisions these
+resources; the Argo CD controller manages notification configuration and copies
+the token and serving CA, including updates after rotation.
 
 Dedicated resources carry a GitopsService owner reference. Reconciliation
 rejects existing resources without that ownership instead of adopting them.
@@ -32,7 +38,7 @@ rejects existing resources without that ownership instead of adopting them.
 | `AGENTIC_RUN_COOLDOWN` | `10m` | Delay after a failed analysis before its one retry; must be positive |
 | `AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD` | `10m` | Application age and sustained-health grace; may be zero |
 | `AGENTIC_TRIGGER_TLS_ENABLED` | `true` | Use the OpenShift service-serving certificate |
-| `AGENTIC_TRIGGER_IMAGE` | `quay.io/redhat-developer/gitops-operator-agentic-trigger:latest` | Trigger image |
+| `AGENTIC_TRIGGER_IMAGE` | `ghcr.io/svghadi/gitops-operator-agentic-trigger:latest` | Trigger image |
 | `AGENTIC_SKILLS_IMAGE` | unset | Optional diagnosis/remediation skills image |
 
 Durations retain full precision (`90s` and `10m30s` are supported). Invalid values
@@ -90,8 +96,8 @@ global notification subscriptions are preserved when the agentic entry is added.
 ## Disablement
 
 ```sh
-oc annotate gitopsservice cluster \
-  gitops.openshift.io/agentic-integration-enabled=false --overwrite
+oc patch argocd openshift-gitops -n openshift-gitops --type=merge \
+  -p '{"spec":{"ai":{"troubleshooting":false}}}'
 ```
 
 The operator stops the trigger Deployment and removes dedicated resources,
@@ -102,7 +108,7 @@ Disabling stops new triggers/retries; it does not cancel a run already submitted
 
 ## API and verification
 
-Only the dedicated `agentic-trigger-notifications` ServiceAccount is authorized.
+Only the dedicated `ai-controller-notifications` ServiceAccount is authorized.
 Manual user requests and console-user authentication are outside this version.
 
 - `POST /api/v1/diagnose`: JSON `{ "application": "my-app", "applicationNamespace": "openshift-gitops" }`. Returns 202 when queued.
@@ -114,10 +120,10 @@ and watches dependency updates. Inspect operator/trigger logs for setup failures
 creation commits, and informer or worker errors.
 
 ```sh
-go test ./internal/agentic ./cmd/agentic-trigger ./controllers
-go test -race ./cmd/agentic-trigger ./internal/agentic
+go test ./internal/agentic ./internal/ai/... ./controllers
+go test -race ./internal/ai/trigger ./internal/agentic
 make docker-build-agentic-trigger AGENTIC_TRIGGER_IMG=agentic-trigger:test
-oc get deployment,service -n openshift-gitops agentic-trigger
+oc get deployment,service -n openshift-gitops ai-controller
 oc get agenticruns.agentic.openshift.io -n openshift-lightspeed
 ```
 
@@ -132,5 +138,5 @@ HTTP receiver against real TokenReview, Application, and AgenticRun APIs; it
 does not deploy the receiver or replace an existing notification installation.
 
 ```sh
-AGENTIC_API_SMOKE=1 go test ./cmd/agentic-trigger -run '^TestOpenShiftAgenticAPISmoke$' -count=1 -v
+AGENTIC_API_SMOKE=1 go test ./internal/ai/trigger -run '^TestOpenShiftAgenticAPISmoke$' -count=1 -v
 ```

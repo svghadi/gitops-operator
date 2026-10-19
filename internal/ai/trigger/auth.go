@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	aiconfig "github.com/argoproj-labs/gitops-operator/argocd-operator/pkg/ai"
 	"github.com/go-logr/logr"
 	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,7 +17,7 @@ const (
 
 	// The expected caller SA name — a dedicated identity with no RBAC permissions,
 	// used only by ArgoCD Notifications to call the webhook.
-	notificationsSAName = "agentic-trigger-notifications"
+	notificationsSAName = aiconfig.NotificationsServiceAccountName
 )
 
 // AuthResult distinguishes authentication failure from authorization failure
