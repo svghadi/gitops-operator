@@ -11,6 +11,7 @@ import (
 	"github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1alpha1"
 	argoproj "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	aiconfig "github.com/argoproj-labs/gitops-operator/argocd-operator/pkg/ai"
+	"github.com/argoproj-labs/gitops-operator/argocd-operator/controllers/argoutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -120,7 +121,12 @@ func (r *ReconcileArgoCD) reconcileAINotifications(cr *argoproj.ArgoCD) error {
 	if tlsEnabled {
 		scheme, port = "https", 8443
 	}
-	nc.Spec.Services[aiNotifServiceKey] = fmt.Sprintf("url: %s://%s.%s.svc:%d\nheaders:\n- name: Authorization\n  value: Bearer $agentic-trigger-token\n", scheme, aiTriggerServiceName, ns, port)
+	// The agentic-trigger Service lives in the operator namespace, not the ArgoCD namespace.
+	triggerNS, err := argoutil.GetOperatorNamespace()
+	if err != nil {
+		return fmt.Errorf("could not determine operator namespace for agentic-trigger webhook URL: %w", err)
+	}
+	nc.Spec.Services[aiNotifServiceKey] = fmt.Sprintf("url: %s://%s.%s.svc:%d\nheaders:\n- name: Authorization\n  value: Bearer $agentic-trigger-token\n", scheme, aiTriggerServiceName, triggerNS, port)
 	if !reflect.DeepEqual(before.Spec, nc.Spec) {
 		if err := r.Client.Patch(context.TODO(), nc, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 			return err
@@ -178,7 +184,7 @@ func (r *ReconcileArgoCD) reconcileAINotifications(cr *argoproj.ArgoCD) error {
 		}
 		return err
 	}
-	host := fmt.Sprintf("%s.%s.svc", aiTriggerServiceName, ns)
+	host := fmt.Sprintf("%s.%s.svc", aiTriggerServiceName, triggerNS)
 	if certs.Data[host] != ca.Data[aiCABundleKey] {
 		before := certs.DeepCopy()
 		if certs.Data == nil {
@@ -232,9 +238,13 @@ func (r *ReconcileArgoCD) cleanupAINotifications(cr *argoproj.ArgoCD) error {
 		return err
 	}
 
+	triggerNS, _ := argoutil.GetOperatorNamespace()
+	if triggerNS == "" {
+		triggerNS = ns
+	}
 	certs := &corev1.ConfigMap{}
 	if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: aiTLSCertsConfigMapName, Namespace: ns}, certs); err == nil {
-		host := fmt.Sprintf("%s.%s.svc", aiTriggerServiceName, ns)
+		host := fmt.Sprintf("%s.%s.svc", aiTriggerServiceName, triggerNS)
 		if _, exists := certs.Data[host]; exists {
 			before := certs.DeepCopy()
 			delete(certs.Data, host)

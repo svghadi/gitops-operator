@@ -48,5 +48,5 @@ func (r *AgenticTriggerReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 
-	return aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, r.OperatorNamespace, req.NamespacedName, instance, log)
+	return aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, r.OperatorNamespace, serviceNamespace, req.NamespacedName, instance, log)
 }

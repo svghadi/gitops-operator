@@ -43,20 +43,24 @@ func DependencyRequests(namespace string) func(ctx context.Context, obj client.O
 
 // ReconcileAgenticTriggerService creates or updates all K8s resources for the
 // agentic-trigger integration and cleans them up when AI is disabled.
+// operatorNamespace is where the Deployment, Service, and RBAC are created.
+// argocdNamespace is where the token Secret and CA ConfigMap are created so
+// that the ArgoCD notifications controller can read them without cross-namespace access.
 func ReconcileAgenticTriggerService(
 	cl client.Client,
 	scheme *runtime.Scheme,
 	enableAIFeatures bool,
+	operatorNamespace string,
 	argocdNamespace string,
 	key types.NamespacedName,
 	instance *pipelinesv1alpha1.GitopsService,
 	logger logr.Logger,
 ) (reconcile.Result, error) {
 	ctx := context.TODO()
-	ns := argocdNamespace
+	ns := operatorNamespace
 	runNS := envOrDefault("AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")
 	if !enableAIFeatures {
-		return reconcile.Result{}, cleanupAgenticTrigger(ctx, cl, ns, runNS, instance)
+		return reconcile.Result{}, cleanupAgenticTrigger(ctx, cl, ns, argocdNamespace, runNS, instance)
 	}
 	grace, err := agentic.Duration(os.Getenv("AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD"), 10*time.Minute, true)
 	if err != nil {
@@ -85,10 +89,12 @@ func ReconcileAgenticTriggerService(
 		NewClusterRole(), NewClusterRoleBinding(ns),
 		NewRole(runNS), NewRoleBinding(runNS, ns),
 		deploy, NewService(ns, tlsEnabled),
+		// Token Secret and CA ConfigMap live in the ArgoCD namespace so the
+		// notifications controller can read them without cross-namespace access.
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        notifications.TokenSecretName,
-				Namespace:   ns,
+				Namespace:   argocdNamespace,
 				Annotations: map[string]string{"kubernetes.io/service-account.name": NotificationsSAName},
 			},
 			Type: corev1.SecretTypeServiceAccountToken,
@@ -98,7 +104,7 @@ func ReconcileAgenticTriggerService(
 		objects = append(objects, &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        notifications.CAConfigMap,
-				Namespace:   ns,
+				Namespace:   argocdNamespace,
 				Annotations: map[string]string{serviceServingCAAnnotation: "true"},
 			},
 		})
@@ -202,7 +208,7 @@ func ensureNamespace(ctx context.Context, cl client.Client, name string) error {
 	})
 }
 
-func cleanupAgenticTrigger(ctx context.Context, cl client.Client, ns, runNS string, owner *pipelinesv1alpha1.GitopsService) error {
+func cleanupAgenticTrigger(ctx context.Context, cl client.Client, ns, argocdNS, runNS string, owner *pipelinesv1alpha1.GitopsService) error {
 	deploy := &appsv1.Deployment{}
 	if err := cl.Get(ctx, types.NamespacedName{Name: ServiceName, Namespace: ns}, deploy); err == nil {
 		if !metav1.IsControlledBy(deploy, owner) {
@@ -225,9 +231,9 @@ func cleanupAgenticTrigger(ctx context.Context, cl client.Client, ns, runNS stri
 		NewRoleBinding(runNS, ns), NewRole(runNS),
 		NewClusterRoleBinding(ns), NewClusterRole(),
 		NewServiceAccount(ns), NewNotificationsServiceAccount(ns),
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: notifications.TokenSecretName, Namespace: ns}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: notifications.TokenSecretName, Namespace: argocdNS}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: ServiceName + "-tls", Namespace: ns}},
-		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: notifications.CAConfigMap, Namespace: ns}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: notifications.CAConfigMap, Namespace: argocdNS}},
 	}
 	for _, obj := range objects {
 		if err := cl.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
