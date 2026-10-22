@@ -3,7 +3,6 @@ package controllers
 import (
 	"context"
 
-	argoapp "github.com/argoproj-labs/gitops-operator/argocd-operator/api/v1beta1"
 	pipelinesv1alpha1 "github.com/redhat-developer/gitops-operator/api/v1alpha1"
 	aioperator "github.com/redhat-developer/gitops-operator/internal/ai/operator"
 	corev1 "k8s.io/api/core/v1"
@@ -28,13 +27,11 @@ type AgenticTriggerReconciler struct {
 }
 
 // SetupWithManager registers the controller. It watches GitopsService as its
-// primary resource and reacts to ArgoCD opt-in changes and updates to the token
-// Secret and CA ConfigMap.
+// primary resource and reacts to updates to the token Secret and CA ConfigMap.
 func (r *AgenticTriggerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	deps := aioperator.DependencyRequests(serviceNamespace)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&pipelinesv1alpha1.GitopsService{}).
-		Watches(&argoapp.ArgoCD{}, handler.EnqueueRequestsFromMapFunc(deps)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(deps)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(deps)).
 		Complete(r)
