@@ -60,6 +60,19 @@ func decodeIncident(app *unstructured.Unstructured) (*incidentState, error) {
 	return state, nil
 }
 
+func (state *incidentState) phase() string {
+	if state.Closed {
+		return "closed"
+	}
+	if !state.RunCreated {
+		return "pending"
+	}
+	if state.RetryAt != nil {
+		return "retry-scheduled"
+	}
+	return "running"
+}
+
 func (s *TriggerService) saveIncident(ctx context.Context, app *unstructured.Unstructured, state *incidentState) error {
 	b, err := json.Marshal(state)
 	if err != nil {
@@ -67,6 +80,8 @@ func (s *TriggerService) saveIncident(ctx context.Context, app *unstructured.Uns
 	}
 	annotations := map[string]any{
 		agentic.IncidentAnnotation: string(b),
+		agentic.DiagnosisState:     state.phase(),
+		agentic.DiagnosisRun:       state.RunName,
 	}
 	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"uid": string(app.GetUID()), "resourceVersion": app.GetResourceVersion(), "annotations": annotations}})
 	if err != nil {

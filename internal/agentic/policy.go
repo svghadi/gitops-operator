@@ -17,6 +17,9 @@ const (
 	AppUID             = "gitops.openshift.io/application-uid"
 	ManagedBy          = "gitops.openshift.io/managed-by"
 	Manager            = "agentic-trigger"
+
+	DiagnosisState = "gitops.openshift.io/diagnosis-state"
+	DiagnosisRun   = "gitops.openshift.io/diagnosis-run"
 )
 
 func Duration(value string, fallback time.Duration, allowZero bool) (time.Duration, error) {
