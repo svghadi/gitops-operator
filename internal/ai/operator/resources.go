@@ -18,6 +18,7 @@ const (
 	ImageEnvName        = "AGENTIC_TRIGGER_IMAGE"
 	DefaultImage        = "ghcr.io/svghadi/gitops-operator-agentic-trigger:latest"
 	SkillsImageEnvName  = "AGENTIC_SKILLS_IMAGE"
+	DefaultSkillsImage  = "quay.io/mangaal/gitops-agentic-skills:skill-test"
 	TLSEnv              = "AGENTIC_TRIGGER_TLS_ENABLED"
 )
 
@@ -204,7 +205,7 @@ func NewDeployment(namespace string, tlsEnabled bool) *appsv1.Deployment {
 								{Name: "AGENTIC_RUN_COOLDOWN", Value: envOrDefault("AGENTIC_RUN_COOLDOWN", "10m")},
 								{Name: "AGENTIC_ANALYSIS_AGENT", Value: envOrDefault("AGENTIC_ANALYSIS_AGENT", "default")},
 								{Name: "AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD", Value: envOrDefault("AGENTIC_AUTO_DIAGNOSIS_GRACE_PERIOD", "10m")},
-								{Name: SkillsImageEnvName, Value: os.Getenv(SkillsImageEnvName)},
+								{Name: SkillsImageEnvName, Value: envOrDefault(SkillsImageEnvName, DefaultSkillsImage)},
 							},
 							VolumeMounts: volumeMounts,
 							Resources: corev1.ResourceRequirements{
