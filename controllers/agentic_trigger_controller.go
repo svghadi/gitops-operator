@@ -19,17 +19,18 @@ var _ reconcile.Reconciler = &AgenticTriggerReconciler{}
 
 // AgenticTriggerReconciler provisions and maintains the agentic-trigger
 // Deployment and its supporting resources (RBAC, Service, token Secret, CA
-// ConfigMap) in the openshift-gitops namespace.
+// ConfigMap) in the operator namespace.
 type AgenticTriggerReconciler struct {
-	Client           client.Client
-	Scheme           *runtime.Scheme
-	EnableAIFeatures bool
+	Client            client.Client
+	Scheme            *runtime.Scheme
+	EnableAIFeatures  bool
+	OperatorNamespace string
 }
 
 // SetupWithManager registers the controller. It watches GitopsService as its
 // primary resource and reacts to updates to the token Secret and CA ConfigMap.
 func (r *AgenticTriggerReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	deps := aioperator.DependencyRequests(serviceNamespace)
+	deps := aioperator.DependencyRequests(r.OperatorNamespace)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&pipelinesv1alpha1.GitopsService{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(deps)).
@@ -47,5 +48,5 @@ func (r *AgenticTriggerReconciler) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 
-	return aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, serviceNamespace, req.NamespacedName, instance, log)
+	return aioperator.ReconcileAgenticTriggerService(r.Client, r.Scheme, r.EnableAIFeatures, r.OperatorNamespace, req.NamespacedName, instance, log)
 }
