@@ -225,7 +225,9 @@ docker-push: ## Push container image with the manager.
 
 .PHONY: docker-build-agentic-trigger
 docker-build-agentic-trigger: ## Build the agentic-trigger container image.
-	$(CONTAINER_RUNTIME) build --platform $(PLATFORM) -f Dockerfile.agentic-trigger -t $(AGENTIC_TRIGGER_IMG) .
+	$(CONTAINER_RUNTIME) build --platform $(PLATFORM) -f Dockerfile.agentic-trigger \
+		--build-arg COMMIT=$(shell git rev-parse --short HEAD) \
+		-t $(AGENTIC_TRIGGER_IMG) .
 
 .PHONY: docker-push-agentic-trigger
 docker-push-agentic-trigger: ## Push the agentic-trigger container image.

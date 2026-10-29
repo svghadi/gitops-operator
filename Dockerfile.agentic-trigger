@@ -7,7 +7,10 @@ COPY cmd/agentic-trigger/ cmd/agentic-trigger/
 COPY internal/agentic/ internal/agentic/
 COPY internal/ai/trigger/ internal/ai/trigger/
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o agentic-trigger ./cmd/agentic-trigger/
+ARG COMMIT=unknown
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="-X main.commit=${COMMIT}" \
+    -o agentic-trigger ./cmd/agentic-trigger/
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /

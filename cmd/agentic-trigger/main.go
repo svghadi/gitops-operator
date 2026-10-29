@@ -15,6 +15,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
+var commit = "unknown"
+
 func main() {
 	var addr string
 	var tlsCert string
@@ -29,6 +31,7 @@ func main() {
 
 	log.SetLogger(zap.New(zap.UseDevMode(true)))
 	logger := log.Log.WithName("agentic-trigger")
+	logger.Info("starting", "commit", commit)
 
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
