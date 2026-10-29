@@ -144,7 +144,7 @@ func TestAgenticUnownedDeploymentIsPreserved(t *testing.T) {
 				_ = cl.Update(context.Background(), argoCD)
 			}
 			ctx := context.Background()
-			deployment := NewDeployment("gitops", true)
+			deployment := NewDeployment("gitops", "gitops", true)
 			if err := cl.Create(ctx, deployment); err != nil {
 				t.Fatal(err)
 			}

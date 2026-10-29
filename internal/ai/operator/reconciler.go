@@ -71,7 +71,7 @@ func ReconcileAgenticTriggerService(
 		return reconcile.Result{}, fmt.Errorf("agentic cooldown: %w", err)
 	}
 	tlsEnabled := !strings.EqualFold(os.Getenv(TLSEnv), "false")
-	deploy := NewDeployment(ns, tlsEnabled)
+	deploy := NewDeployment(ns, argocdNamespace, tlsEnabled)
 	for i := range deploy.Spec.Template.Spec.Containers[0].Env {
 		e := &deploy.Spec.Template.Spec.Containers[0].Env[i]
 		switch e.Name {
@@ -227,7 +227,7 @@ func cleanupAgenticTrigger(ctx context.Context, cl client.Client, ns, argocdNS, 
 	}
 
 	objects := []client.Object{
-		NewDeployment(ns, true), NewService(ns, true),
+		NewDeployment(ns, argocdNS, true), NewService(ns, true),
 		NewRoleBinding(runNS, ns), NewRole(runNS),
 		NewClusterRoleBinding(ns), NewClusterRole(),
 		NewServiceAccount(ns), NewNotificationsServiceAccount(argocdNS),

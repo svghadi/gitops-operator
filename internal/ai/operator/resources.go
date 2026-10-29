@@ -122,7 +122,7 @@ func NewRoleBinding(namespace, saNamespace string) *rbacv1.RoleBinding {
 	}
 }
 
-func NewDeployment(namespace string, tlsEnabled bool) *appsv1.Deployment {
+func NewDeployment(namespace, argocdNamespace string, tlsEnabled bool) *appsv1.Deployment {
 	image := os.Getenv(ImageEnvName)
 	if image == "" {
 		image = DefaultImage
@@ -200,7 +200,7 @@ func NewDeployment(namespace string, tlsEnabled bool) *appsv1.Deployment {
 								},
 							},
 							Env: []corev1.EnvVar{
-								{Name: "ARGOCD_NAMESPACE", Value: namespace},
+								{Name: "ARGOCD_NAMESPACE", Value: argocdNamespace},
 								{Name: "AGENTIC_RUN_NAMESPACE", Value: envOrDefault("AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")},
 								{Name: "AGENTIC_RUN_COOLDOWN", Value: envOrDefault("AGENTIC_RUN_COOLDOWN", "10m")},
 								{Name: "AGENTIC_ANALYSIS_AGENT", Value: envOrDefault("AGENTIC_ANALYSIS_AGENT", "default")},
