@@ -90,9 +90,8 @@ the serving certificate and CA when TLS is enabled.
 For the GitOps skills, set an image containing all three paths before testing:
 
 ```sh
-# Replace with your published skills image.
-# oc -n openshift-gitops-operator set env deployment/openshift-gitops-operator-controller-manager \
-#   AGENTIC_SKILLS_IMAGE=quay.io/your-org/your-skills:tag
+oc -n openshift-gitops-operator set env deployment/openshift-gitops-operator-controller-manager \
+  AGENTIC_SKILLS_IMAGE=ghcr.io/redhat-developer/agentic-skills:latest
 ```
 
 The image must contain `/skills/gitops/argo-cluster-debug`,

@@ -31,7 +31,7 @@ func LoadServiceConfig() (ServiceConfig, error) {
 
 	skillsImage := os.Getenv("AGENTIC_SKILLS_IMAGE")
 	if skillsImage == "" {
-		skillsImage = "quay.io/mangaal/gitops-agentic-skills:skill-test"
+		skillsImage = "ghcr.io/redhat-developer/agentic-skills:latest"
 	}
 
 	argocdNamespace := os.Getenv("ARGOCD_NAMESPACE")

@@ -18,7 +18,7 @@ const (
 	ImageEnvName        = "AGENTIC_TRIGGER_IMAGE"
 	DefaultImage        = "ghcr.io/svghadi/gitops-operator-agentic-trigger:latest"
 	SkillsImageEnvName  = "AGENTIC_SKILLS_IMAGE"
-	DefaultSkillsImage  = "quay.io/mangaal/gitops-agentic-skills:skill-test"
+	DefaultSkillsImage  = "ghcr.io/redhat-developer/agentic-skills:latest"
 	TLSEnv              = "AGENTIC_TRIGGER_TLS_ENABLED"
 )
 
