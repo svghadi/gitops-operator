@@ -85,7 +85,7 @@ func ReconcileAgenticTriggerService(
 		return reconcile.Result{}, fmt.Errorf("ensure namespace %s: %w", runNS, err)
 	}
 	objects := []client.Object{
-		NewServiceAccount(ns), NewNotificationsServiceAccount(ns),
+		NewServiceAccount(ns), NewNotificationsServiceAccount(argocdNamespace),
 		NewClusterRole(), NewClusterRoleBinding(ns),
 		NewRole(runNS), NewRoleBinding(runNS, ns),
 		deploy, NewService(ns, tlsEnabled),
@@ -230,7 +230,7 @@ func cleanupAgenticTrigger(ctx context.Context, cl client.Client, ns, argocdNS, 
 		NewDeployment(ns, true), NewService(ns, true),
 		NewRoleBinding(runNS, ns), NewRole(runNS),
 		NewClusterRoleBinding(ns), NewClusterRole(),
-		NewServiceAccount(ns), NewNotificationsServiceAccount(ns),
+		NewServiceAccount(ns), NewNotificationsServiceAccount(argocdNS),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: notifications.TokenSecretName, Namespace: argocdNS}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: ServiceName + "-tls", Namespace: ns}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: notifications.CAConfigMap, Namespace: argocdNS}},
