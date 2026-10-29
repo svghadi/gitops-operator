@@ -2,7 +2,6 @@ package trigger
 
 import (
 	"os"
-	"strings"
 	"time"
 
 	"github.com/redhat-developer/gitops-operator/internal/agentic"
@@ -37,9 +36,6 @@ func LoadServiceConfig() (ServiceConfig, error) {
 	argocdNamespace := os.Getenv("ARGOCD_NAMESPACE")
 	if argocdNamespace == "" {
 		argocdNamespace = "openshift-gitops"
-	}
-	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
-		argocdNamespace = strings.TrimSpace(string(data))
 	}
 
 	return ServiceConfig{
