@@ -302,7 +302,9 @@ func (s *TriggerService) reconcileDiagnosis(ctx context.Context, namespace, name
 			return run, "creation confirmed", 0, true, nil
 		}
 	}
+	appKey := namespace + "/" + name
 	if agentic.Recovered(health) {
+		s.clearGrace(appKey)
 		if state != nil && !state.Closed {
 			state.Closed = true
 			if err := s.saveIncident(ctx, app, state); err != nil {
@@ -312,14 +314,16 @@ func (s *TriggerService) reconcileDiagnosis(ctx context.Context, namespace, name
 		return nil, "application recovered", 0, false, nil
 	}
 	if state != nil && !state.RunCreated && !state.Closed && state.Revision != revision {
+		s.clearGrace(appKey)
 		state.Closed = true
 		if err := s.saveIncident(ctx, app, state); err != nil {
 			return nil, "", 0, false, err
 		}
 		return nil, "stale incident closed", 0, true, nil
 	}
-	needed, wait := agentic.Eligibility(app, s.currentTime(), s.config.AutoDiagnosisGracePeriod)
+	needed, eligWait := agentic.Eligibility(app, s.currentTime(), s.config.AutoDiagnosisGracePeriod)
 	if !needed {
+		s.clearGrace(appKey)
 		if state != nil && !state.RunCreated && !state.Closed {
 			state.Closed = true
 			if err := s.saveIncident(ctx, app, state); err != nil {
@@ -328,6 +332,9 @@ func (s *TriggerService) reconcileDiagnosis(ctx context.Context, namespace, name
 		}
 		return nil, "health does not qualify", 0, false, nil
 	}
+	// Use a stable grace clock so ArgoCD sync retries that reset lastTransitionTime
+	// do not extend the grace period indefinitely.
+	wait := s.graceClock(appKey, revision, eligWait)
 	if wait > 0 {
 		return nil, "waiting for diagnosis grace period", wait, false, nil
 	}

@@ -15,11 +15,38 @@ import (
 // New creates a TriggerService ready to start.
 func New(cfg ServiceConfig, kube kubernetes.Interface, dyn dynamic.Interface, logger logr.Logger) *TriggerService {
 	return &TriggerService{
-		kubeClient: kube,
-		dynClient:  dyn,
-		config:     cfg,
-		logger:     logger,
-		queue:      newDiagnosisQueue(),
+		kubeClient:   kube,
+		dynClient:    dyn,
+		config:       cfg,
+		logger:       logger,
+		queue:        newDiagnosisQueue(),
+		graceStarted: map[string]graceEntry{},
+	}
+}
+
+func (s *TriggerService) graceClock(key, revision string, eligibilityWait time.Duration) time.Duration {
+	if s.graceStarted == nil {
+		s.graceStarted = map[string]graceEntry{}
+	}
+	if e, ok := s.graceStarted[key]; ok && e.revision == revision {
+		if remaining := s.config.AutoDiagnosisGracePeriod - s.currentTime().Sub(e.start); remaining > 0 {
+			return remaining
+		}
+		return 0
+	}
+	if eligibilityWait > 0 {
+		// Back-calculate when grace started from Eligibility's remaining wait.
+		s.graceStarted[key] = graceEntry{
+			start:    s.currentTime().Add(eligibilityWait - s.config.AutoDiagnosisGracePeriod),
+			revision: revision,
+		}
+	}
+	return eligibilityWait
+}
+
+func (s *TriggerService) clearGrace(key string) {
+	if s.graceStarted != nil {
+		delete(s.graceStarted, key)
 	}
 }
 

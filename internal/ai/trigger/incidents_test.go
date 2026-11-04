@@ -884,6 +884,45 @@ func TestUnconfirmedIncidentWaitsForRemainingGrace(t *testing.T) {
 	countRuns(t, s, 1)
 }
 
+// TestGraceClockStableAcrossArgoCDRetries verifies that ArgoCD sync retries
+// resetting lastTransitionTime do not reset the grace period indefinitely.
+func TestGraceClockStableAcrossArgoCDRetries(t *testing.T) {
+	s, dyn, now := incidentFixture(t)
+	grace := 90 * time.Second
+	s.config.AutoDiagnosisGracePeriod = grace
+
+	// App created 1h ago; lastTransitionTime initially set to now-89s.
+	changeApp(t, dyn, func(app *unstructured.Unstructured) {
+		_ = unstructured.SetNestedField(app.Object, "Progressing", "status", "health", "status")
+		_ = unstructured.SetNestedField(app.Object, now.Add(-89*time.Second).Format(time.RFC3339), "status", "health", "lastTransitionTime")
+	})
+
+	// First reconcile: 1s remaining in grace period.
+	_, reason, wait, _, err := s.reconcileDiagnosis(context.Background(), "gitops", "demo")
+	if err != nil || reason != "waiting for diagnosis grace period" || wait != time.Second {
+		t.Fatalf("first reconcile: reason=%q wait=%s err=%v", reason, wait, err)
+	}
+
+	// Simulate ArgoCD resetting lastTransitionTime (self-heal retry).
+	changeApp(t, dyn, func(app *unstructured.Unstructured) {
+		_ = unstructured.SetNestedField(app.Object, now.Format(time.RFC3339), "status", "health", "lastTransitionTime")
+	})
+
+	// Without the grace clock, Eligibility would now return wait=90s and the
+	// grace period would reset. The grace clock must keep the original ~1s.
+	_, reason, wait, _, err = s.reconcileDiagnosis(context.Background(), "gitops", "demo")
+	if err != nil || reason != "waiting for diagnosis grace period" || wait > 2*time.Second {
+		t.Fatalf("after lastTransitionTime reset: reason=%q wait=%s err=%v (expected ≤2s)", reason, wait, err)
+	}
+
+	// Advance past grace; next reconcile must create the incident and run.
+	*now = now.Add(2 * time.Second)
+	if run := reconcileApp(t, s); run == nil {
+		t.Fatal("grace expiry did not create the run")
+	}
+	countRuns(t, s, 1)
+}
+
 func TestApplicationUIDChangeBetweenReadsRetries(t *testing.T) {
 	s, dyn, _ := incidentFixture(t)
 	reads := 0
