@@ -81,7 +81,7 @@ func (s *TriggerService) saveIncident(ctx context.Context, app *unstructured.Uns
 	annotations := map[string]any{
 		agentic.IncidentAnnotation: string(b),
 		agentic.DiagnosisState:     state.phase(),
-		agentic.DiagnosisRun:       state.RunName,
+		agentic.DiagnosisRun:       "/lightspeed/runs/" + state.RunNamespace + "/" + state.RunName,
 	}
 	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"uid": string(app.GetUID()), "resourceVersion": app.GetResourceVersion(), "annotations": annotations}})
 	if err != nil {
