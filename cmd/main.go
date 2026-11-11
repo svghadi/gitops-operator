@@ -246,7 +246,15 @@ func main() {
 	}
 
 	if enableAIFeatures && util.IsConfigAPIFound() {
-		ocpVersionStr, err := util.GetClusterVersion(client)
+		directClient, err := crclient.New(ctrl.GetConfigOrDie(), crclient.Options{Scheme: mgr.GetScheme()})
+		if err != nil {
+			setupLog.Error(err, "unable to create client for AI version check; disabling AI features")
+			enableAIFeatures = false
+		}
+		var ocpVersionStr string
+		if enableAIFeatures {
+			ocpVersionStr, err = util.GetClusterVersion(directClient)
+		}
 		if err != nil {
 			setupLog.Error(err, "unable to determine cluster version; disabling AI features")
 			enableAIFeatures = false
