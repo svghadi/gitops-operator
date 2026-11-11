@@ -36,7 +36,7 @@ func incidentFixture(t *testing.T) (*TriggerService, *dynamicfake.FakeDynamicCli
 		"spec":     map[string]any{"destination": map[string]any{"namespace": "workload"}},
 		"status":   map[string]any{"sync": map[string]any{"status": "Synced", "revision": "rev1"}, "health": map[string]any{"status": "Degraded", "lastTransitionTime": now.Add(-time.Hour).Format(time.RFC3339)}},
 	}}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{applicationGVR: "ApplicationList", agenticRunGVR: "AgenticRunList", agenticResultGVR: "AnalysisResultList"}, app)
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{applicationGVR: "ApplicationList", agenticRunGVR: "AgenticRunList"}, app)
 	// The dynamic fake does not implement resourceVersion preconditions. Model
 	// apiserver compare-and-swap so concurrent tests actually exercise conflicts.
 	var mu sync.Mutex

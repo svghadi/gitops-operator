@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-logr/logr"
 	argoproj "github.com/redhat-developer/gitops-operator/argocd-operator/api/v1beta1"
-	"github.com/redhat-developer/gitops-operator/internal/ai/notifications"
 	"github.com/redhat-developer/gitops-operator/internal/ai/utils"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -20,12 +19,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
-
-const serviceServingCAAnnotation = "service.beta.openshift.io/inject-cabundle"
 
 var _ reconcile.Reconciler = &GitOpsAIControllerReconciler{}
 
@@ -42,11 +38,8 @@ type GitOpsAIControllerReconciler struct {
 // primary resource. The token Secret and CA ConfigMap trigger re-reconciliation
 // by listing ArgoCD instances in the same namespace as the changed object.
 func (r *GitOpsAIControllerReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	deps := DependencyRequests(r.Client)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&argoproj.ArgoCD{}).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(deps)).
-		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(deps)).
 		Complete(r)
 }
 
@@ -56,29 +49,6 @@ func (r *GitOpsAIControllerReconciler) Reconcile(ctx context.Context, req reconc
 	)
 	return reconcileAIController(r.Client, r.EnableAIFeatures,
 		r.OperatorNamespace, req.NamespacedName, log)
-}
-
-// DependencyRequests returns a handler that re-enqueues the ArgoCD reconcile
-// request when the token Secret or CA ConfigMap changes. It lists all ArgoCD
-// instances in the same namespace as the changed object — the token and CA
-// always live in the ArgoCD namespace — so no namespace needs to be pre-configured.
-func DependencyRequests(cl client.Client) func(ctx context.Context, obj client.Object) []reconcile.Request {
-	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		switch obj.GetName() {
-		case notifications.TokenSecretName, notifications.CAConfigMap:
-		default:
-			return nil
-		}
-		instances := &argoproj.ArgoCDList{}
-		if err := cl.List(ctx, instances, client.InNamespace(obj.GetNamespace())); err != nil {
-			return nil
-		}
-		requests := make([]reconcile.Request, 0, len(instances.Items))
-		for i := range instances.Items {
-			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&instances.Items[i])})
-		}
-		return requests
-	}
 }
 
 // reconcileAIController creates or updates all K8s resources for the

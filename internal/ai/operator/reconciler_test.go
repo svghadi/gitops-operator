@@ -208,31 +208,6 @@ func TestAgenticArgoCDReadErrorPreservesResources(t *testing.T) {
 	}
 }
 
-func TestAgenticDependencyRequests(t *testing.T) {
-	cl := agenticOperatorFixture(t)
-	mapper := DependencyRequests(cl)
-	wantKey := types.NamespacedName{Name: common.ArgoCDInstanceName, Namespace: testServiceNamespace}
-	for _, tc := range []struct {
-		name string
-		obj  client.Object
-		want int
-	}{
-		{"token", &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: notifications.TokenSecretName, Namespace: testServiceNamespace}}, 1},
-		{"CA", &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: notifications.CAConfigMap, Namespace: testServiceNamespace}}, 1},
-		{"unrelated secret", &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: testServiceNamespace}}, 0},
-		{"wrong namespace", &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: notifications.TokenSecretName, Namespace: "other"}}, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			requests := mapper(context.Background(), tc.obj)
-			if len(requests) != tc.want {
-				t.Fatalf("got requests %v, want %d", requests, tc.want)
-			}
-			if len(requests) > 0 && requests[0].NamespacedName != wantKey {
-				t.Fatalf("wrong ArgoCD request key: got %v, want %v", requests[0].NamespacedName, wantKey)
-			}
-		})
-	}
-}
 
 func TestGitOpsAIControllerReconciler(t *testing.T) {
 	t.Setenv("GITOPS_AI_AGENTIC_RUN_NAMESPACE", "openshift-lightspeed")

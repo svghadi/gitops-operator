@@ -55,7 +55,6 @@ func (s *TriggerService) clearGrace(key string) {
 func (s *TriggerService) Run(ctx context.Context, addr, tlsCert, tlsKey string, tlsEnabled bool) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/diagnose", s.HandleDiagnose)
-	mux.HandleFunc("GET /api/v1/applications/{namespace}/{name}/diagnosis", s.HandleDiagnosis)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

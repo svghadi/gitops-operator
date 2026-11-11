@@ -13,8 +13,6 @@ const (
 	TokenSecretName     = "gitops-ai-controller-notifications-token"
 	NotificationsSecret = "argocd-notifications-secret"
 	TriggerTokenKey     = "gitops-ai-controller-token"
-	TLSCertsConfigMap   = "argocd-tls-certs-cm"
-	CABundleKey         = "service-ca.crt"
 	CAConfigMap         = "gitops-ai-controller-serving-ca"
 	ServiceName         = "gitops-ai-controller"
 )

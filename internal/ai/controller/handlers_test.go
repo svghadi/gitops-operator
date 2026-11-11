@@ -1,12 +1,7 @@
 package controller
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/redhat-developer/gitops-operator/internal/ai/utils"
 )
@@ -60,57 +55,3 @@ func TestBuildAgenticRunObject_AnnotationsPreserved(t *testing.T) {
 	}
 }
 
-func TestDiagnosisEndpointUsesLatestOwnedRun(t *testing.T) {
-	s, dyn, now := incidentFixture(t)
-	first := reconcileApp(t, s)
-	app, err := s.getApplication(context.Background(), "gitops", "demo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if app.GetAnnotations()[utils.IncidentAnnotation] == "" {
-		t.Fatal("incident was not persisted")
-	}
-
-	state, err := decodeIncident(app)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Attempt = 2
-	s.prepareRunAttempt(app, state)
-	if err := s.saveIncident(context.Background(), app, state); err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/applications/gitops/demo/diagnosis", nil)
-	request.SetPathValue("namespace", "gitops")
-	request.SetPathValue("name", "demo")
-	request.Header.Set("Authorization", "Bearer token")
-	checkRun := func(want string) {
-		t.Helper()
-		response := httptest.NewRecorder()
-		s.HandleDiagnosis(response, request)
-		if response.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-		}
-		var diagnosis DiagnosisResponse
-		if err := json.Unmarshal(response.Body.Bytes(), &diagnosis); err != nil {
-			t.Fatal(err)
-		}
-		if diagnosis.Run == nil || diagnosis.Run.Name != want {
-			t.Fatalf("selected run=%+v, want %q", diagnosis.Run, want)
-		}
-	}
-	checkRun(first.GetName()) // While attempt 2 is unconfirmed, show the last existing run.
-
-	app, err = s.getApplication(context.Background(), "gitops", "demo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second := s.buildIncidentRun(app, state)
-	annotations := second.GetAnnotations()
-	annotations[utils.AppTriggeredAt] = now.Add(time.Minute).Format(time.RFC3339Nano)
-	second.SetAnnotations(annotations)
-	if err := dyn.Tracker().Create(agenticRunGVR, second, "lightspeed"); err != nil {
-		t.Fatal(err)
-	}
-	checkRun(second.GetName()) // The latest owned run is selected.
-}

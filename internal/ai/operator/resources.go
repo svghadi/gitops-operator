@@ -13,9 +13,8 @@ import (
 )
 
 const (
-	ServiceName         = aiconfig.ServiceName
-	NotificationsSAName = aiconfig.NotificationsServiceAccountName
-	ImageEnvName        = "GITOPS_AI_CONTROLLER_IMAGE"
+	ServiceName        = aiconfig.ServiceName
+	ImageEnvName       = "GITOPS_AI_CONTROLLER_IMAGE"
 	DefaultImage        = "ghcr.io/svghadi/gitops-ai-controller:latest"
 	SkillsImageEnvName  = "GITOPS_AI_SKILLS_IMAGE"
 	DefaultSkillsImage  = "ghcr.io/redhat-developer/agentic-skills:latest"
@@ -26,15 +25,6 @@ func NewServiceAccount(namespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceName,
-			Namespace: namespace,
-		},
-	}
-}
-
-func NewNotificationsServiceAccount(namespace string) *corev1.ServiceAccount {
-	return &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      NotificationsSAName,
 			Namespace: namespace,
 		},
 	}

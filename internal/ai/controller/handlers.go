@@ -64,78 +64,6 @@ func (s *TriggerService) HandleDiagnose(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusAccepted, DiagnoseResponse{Accepted: true, Reason: "diagnosis queued"})
 }
 
-// HandleDiagnosis is the handler for the diagnosis endpoint.
-// It returns the latest diagnosis for an application.
-func (s *TriggerService) HandleDiagnosis(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namespace := r.PathValue("namespace")
-	name := r.PathValue("name")
-	logger := s.logger.WithValues("app", namespace+"/"+name)
-
-	token := extractBearerToken(r.Header.Get("Authorization"))
-	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, DiagnosisResponse{Status: "error"})
-		return
-	}
-
-	authResult := authenticateCaller(ctx, s.kubeClient, token, s.config.ArgocdNamespace, logger)
-	if authResult == nil {
-		writeJSON(w, http.StatusInternalServerError, DiagnosisResponse{Status: "error"})
-		return
-	}
-	if !authResult.Authenticated {
-		writeJSON(w, http.StatusUnauthorized, DiagnosisResponse{Status: "error"})
-		return
-	}
-	if !authResult.Authorized {
-		writeJSON(w, http.StatusForbidden, DiagnosisResponse{Status: "error"})
-		return
-	}
-
-	app, err := s.getApplication(ctx, namespace, name)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, DiagnosisResponse{Status: "error"})
-		return
-	}
-
-	appUID := string(app.GetUID())
-	syncStatus, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
-	healthStatus, _, _ := unstructured.NestedString(app.Object, "status", "health", "status")
-	revision := utils.Revision(app)
-
-	// Build the application information
-	appInfo := &ApplicationInfo{
-		Name:         name,
-		Namespace:    namespace,
-		UID:          appUID,
-		SyncStatus:   syncStatus,
-		HealthStatus: healthStatus,
-		Revision:     revision,
-	}
-
-	var latestRun *unstructured.Unstructured
-	runs, err := s.listAgenticRuns(ctx, name, namespace, appUID)
-	if err != nil {
-		logger.Error(err, "failed to list AgenticRuns")
-		writeJSON(w, http.StatusInternalServerError, DiagnosisResponse{Status: "error"})
-		return
-	}
-	if len(runs) > 0 {
-		latestRun = runs[0]
-	}
-
-	if latestRun == nil {
-		writeJSON(w, http.StatusOK, DiagnosisResponse{
-			Status:      "idle",
-			Application: appInfo,
-		})
-		return
-	}
-
-	resp := s.buildDiagnosisFromRun(ctx, latestRun, name, namespace, appUID, syncStatus, healthStatus, revision)
-	writeJSON(w, http.StatusOK, resp)
-}
-
 func (s *TriggerService) getApplication(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error) {
 	return s.dynClient.Resource(applicationGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 }
@@ -181,10 +109,6 @@ func (s *TriggerService) listAgenticRuns(ctx context.Context, appName, appNamesp
 	})
 
 	return runs, nil
-}
-
-func (s *TriggerService) getAgenticResult(ctx context.Context, runName string) (*unstructured.Unstructured, error) {
-	return s.dynClient.Resource(agenticResultGVR).Namespace(s.config.RunNamespace).Get(ctx, runName, metav1.GetOptions{})
 }
 
 type AgenticRunParams struct {
@@ -356,105 +280,6 @@ func buildConditionsContext(p *AgenticRunParams) string {
 	}
 
 	return sb.String()
-}
-
-func (s *TriggerService) buildDiagnosisFromRun(ctx context.Context, run *unstructured.Unstructured, appName, appNS, appUID, syncStatus, healthStatus, revision string) DiagnosisResponse {
-	annotations := run.GetAnnotations()
-	triggeredAt := annotations[utils.AppTriggeredAt]
-	triggerRevision := annotations[utils.AppRevision]
-	triggerHealth := annotations[utils.AppHealthStatus]
-
-	status := diagnosisStateForRun(run)
-
-	stale := false
-	if triggerRevision != revision || triggerHealth != healthStatus {
-		stale = true
-	}
-
-	resp := DiagnosisResponse{
-		Status: status,
-		Run: &RunInfo{
-			Name:      run.GetName(),
-			Namespace: run.GetNamespace(),
-			StartedAt: triggeredAt,
-		},
-		Application: &ApplicationInfo{
-			Name:         appName,
-			Namespace:    appNS,
-			UID:          appUID,
-			SyncStatus:   syncStatus,
-			HealthStatus: healthStatus,
-			Revision:     revision,
-		},
-		Stale: stale,
-	}
-
-	if status == "failed" {
-		conditions, _, _ := unstructured.NestedSlice(run.Object, "status", "conditions")
-		for _, raw := range conditions {
-			c, _ := raw.(map[string]any)
-			if stringFromMap(c, "type") == "Analyzed" && stringFromMap(c, "status") == "False" {
-				resp.Summary = stringFromMap(c, "message")
-			}
-		}
-	}
-	if status == "completed" || status == "failed" {
-		refs, _, _ := unstructured.NestedSlice(run.Object, "status", "steps", "analysis", "results")
-		if len(refs) == 0 {
-			if status == "completed" {
-				resp.Status = "running"
-			}
-			return resp
-		}
-		ref, _ := refs[len(refs)-1].(map[string]any)
-		result, err := s.getAgenticResult(ctx, stringFromMap(ref, "name"))
-		if err != nil {
-			if status == "completed" {
-				resp.Status = "running"
-			}
-			return resp
-		}
-		parent, _, _ := unstructured.NestedString(result.Object, "spec", "agenticRunName")
-		if parent != run.GetName() {
-			resp.Status = "running"
-			return resp
-		}
-		if status == "failed" {
-			if failure, _, _ := unstructured.NestedString(result.Object, "status", "failureReason"); failure != "" {
-				resp.Summary = failure
-			}
-		} else {
-			resp.Summary, _, _ = unstructured.NestedString(result.Object, "status", "diagnosis", "summary")
-		}
-		conditions, _, _ := unstructured.NestedSlice(result.Object, "status", "conditions")
-		for _, raw := range conditions {
-			c, _ := raw.(map[string]any)
-			if stringFromMap(c, "type") == "Completed" && stringFromMap(c, "status") == "True" {
-				resp.Run.CompletedAt = stringFromMap(c, "lastTransitionTime")
-			}
-		}
-		options, _, _ := unstructured.NestedSlice(result.Object, "status", "options")
-		for i, raw := range options {
-			option, _ := raw.(map[string]any)
-			summary, _, _ := unstructured.NestedString(option, "diagnosis", "summary")
-			cause, _, _ := unstructured.NestedString(option, "diagnosis", "rootCause")
-			if i == 0 && resp.Summary == "" {
-				resp.Summary = summary
-			}
-			remediation, _, _ := unstructured.NestedString(option, "remediationPlan", "description")
-			actions, _, _ := unstructured.NestedSlice(option, "remediationPlan", "actions")
-			for _, raw := range actions {
-				action, _ := raw.(map[string]any)
-				remediation += "\n" + stringFromMap(action, "description")
-				if command := stringFromMap(action, "command"); command != "" {
-					remediation += "\n```sh\n" + command + "\n```"
-				}
-			}
-			resp.Suggestions = append(resp.Suggestions, DiagnosisSuggestion{ID: fmt.Sprintf("%s-%d", result.GetName(), i+1), Severity: "info", Title: stringFromMap(option, "title"), Description: strings.TrimSpace(cause + "\n" + summary), Remediation: strings.TrimSpace(remediation)})
-		}
-	}
-
-	return resp
 }
 
 // diagnosisStateForRun reports the trigger's diagnosis state, not the
