@@ -186,7 +186,6 @@ func buildToolsSpec(skillsImage string) map[string]any {
 				"paths": []any{
 					"/skills/gitops/argo-cluster-debug",
 					"/skills/gitops/argo-knowledge",
-					"/skills/gitops/argo-operations",
 				},
 			},
 		}
