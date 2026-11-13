@@ -80,3 +80,27 @@ gitops-ai-controller
 ```
 
 The controller creates a `TokenReview` for every incoming request and rejects any token that does not resolve to the exact SA `system:serviceaccount:<argocd-namespace>:gitops-ai-controller-notifications`. No additional RBAC is granted to that SA — it cannot read or write any cluster resource.
+
+---
+
+## Planned enhancements
+
+### Webhook authorization hardening
+
+The current check verifies the caller's identity (correct SA in the correct namespace) but does not validate request content against cluster state. The following checks are planned:
+
+- **`spec.ai.troubleshooting` gate at request time** — read the ArgoCD CR at webhook time and reject the request if the instance has disabled AI troubleshooting. Today the flag is only checked at reconcile time, so a notification in-flight after the flag is turned off is still accepted.
+- **Application-to-instance namespace binding** — verify that the `applicationNamespace` in the webhook body is a namespace managed by the ArgoCD instance associated with the authenticated SA. This prevents a caller from triggering diagnosis for Applications outside their instance's scope.
+- **Application existence and ownership check** — confirm the Application named in the webhook exists in the claimed namespace before enqueuing, so a compromised caller cannot cause the controller to work on arbitrary names.
+
+### Projected tokens with a dedicated audience
+
+The notifications SA currently uses a long-lived `kubernetes.io/service-account-token` Secret and the `TokenReview` is performed without an explicit audience, which means Kubernetes validates it against the API server audience.
+
+The planned improvement is to replace the long-lived Secret with a short-lived projected `ServiceAccountToken` volume (e.g. 1-hour expiry) and add a dedicated audience (e.g. `gitops-ai-controller`) to both the token projection and the `TokenReview` call. This limits the blast radius if a token is exposed: it expires quickly and is not accepted by any other endpoint.
+
+### Namespace-scoped Application RBAC
+
+The controller currently holds a `ClusterRole` with `get` and `patch` on `argoproj.io/applications` so it can write incident and visual annotations to Applications in any namespace. This is broader than necessary.
+
+The planned improvement is to replace the ClusterRole/ClusterRoleBinding with per-namespace `Role` and `RoleBinding` resources, one pair per namespace managed by the ArgoCD instance. The operator reconciler would create and delete these bindings in sync with the ArgoCD instance's `spec.sourceNamespaces` and `spec.applicationSet.sourceNamespaces` configuration, granting the controller access only to the namespaces it legitimately manages.
